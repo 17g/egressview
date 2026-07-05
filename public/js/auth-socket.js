@@ -35,7 +35,7 @@ function describeThisDevice() {
 }
 
 function refreshSavedPlaceholders() {
-  ['s-asus-pass', 's-yamaha-pass', 's-slack-token'].forEach(id => {
+  ['s-asus-pass', 's-yamaha-pass', 's-cisco-pass', 's-slack-token'].forEach(id => {
     const el = document.getElementById(id);
     if (el && el.dataset.saved === 'true') el.placeholder = t('settings.pass.saved');
   });
@@ -286,11 +286,23 @@ socket.on('config', cfg => {
     yamahaConfigured = cfg.yamahaEnabled;
     document.getElementById('enable-yamaha').checked = yamahaConfigured;
     toggleSection('yamaha-inputs', 'enable-yamaha', 'yamaha-connect-btn');
-    connState.l3l4.enabled = cfg.yamahaEnabled;
-    connState.l3l4.ready   = !!cfg.yamahaReady;
+    if (cfg.yamahaIp)   document.getElementById('s-yamaha-ip').value   = cfg.yamahaIp;
+    if (cfg.yamahaUser) document.getElementById('s-yamaha-user').value = cfg.yamahaUser;
+    if (cfg.yamahaNat)  document.getElementById('s-yamaha-nat').value  = cfg.yamahaNat;
+    connState.l3l4.enabled = cfg.yamahaEnabled || cfg.ciscoEnabled;
+    connState.l3l4.ready   = !!(cfg.yamahaReady || cfg.ciscoReady);
     connState.l3l4.ip      = cfg.yamahaIp || '';
-    connState.l3l4.err     = cfg.yamahaEnabled && !cfg.yamahaReady ? 'connecting' : '';
+    connState.l3l4.err     = (cfg.yamahaEnabled || cfg.ciscoEnabled) && !(cfg.yamahaReady || cfg.ciscoReady) ? 'connecting' : '';
     updateConnBadge('l3l4');
+  }
+  if (cfg.ciscoEnabled !== undefined) {
+    document.getElementById('enable-cisco').checked = cfg.ciscoEnabled;
+    toggleSection('cisco-inputs', 'enable-cisco', 'cisco-connect-btn');
+    if (cfg.ciscoIp)   document.getElementById('s-cisco-ip').value   = cfg.ciscoIp;
+    if (cfg.ciscoUser) document.getElementById('s-cisco-user').value = cfg.ciscoUser;
+    const ciscoPwEl = document.getElementById('s-cisco-pass');
+    ciscoPwEl.placeholder = cfg.ciscoPassSet ? t('settings.pass.saved') : t('settings.pass.empty');
+    ciscoPwEl.dataset.saved = cfg.ciscoPassSet ? 'true' : 'false';
   }
   if (cfg.asusEnabled !== undefined) {
     document.getElementById('enable-asus').checked = cfg.asusEnabled;

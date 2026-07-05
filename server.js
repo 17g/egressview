@@ -23,6 +23,7 @@ const notifier        = require('./src/notifier');
 const i18n            = require('./src/i18n-server');
 const backup          = require('./src/backup');
 const yamaha          = require('./src/pollers/yamaha-adapter');
+const cisco           = require('./src/pollers/cisco-adapter');
 const asus            = require('./src/pollers/asus');
 const dnsmasqLog      = require('./src/pollers/dnsmasq-log');
 const inspectSyslog   = require('./src/pollers/inspect-syslog');
@@ -164,6 +165,16 @@ function loadConfig() {
       natDescriptor: data.yamaha.nat     || '100',
     });
   }
+  if (data.cisco) {
+    cisco.configure({
+      ip:         data.cisco.ip         || '',
+      user:       data.cisco.user       || '',
+      pass:       data.cisco.pass       || '',
+      enablePass: data.cisco.enablePass || '',
+      enabled:    data.cisco.enabled === true,
+      hostFp:     data.cisco.hostFp    || '',
+    });
+  }
   if (data.asus) {
     asus.configure({
       routerIp: data.asus.ip   || DEFAULT_ROUTER_IP,
@@ -235,6 +246,7 @@ function loadConfig() {
 function saveConfig() {
   const data = {
     yamaha:  { ip: yamaha.getIp(), user: yamaha.getUser(), pass: '', enabled: yamaha.isEnabled(), hostFp: yamaha.getHostFp(), nat: yamaha.getNat() },
+    cisco:   { ip: cisco.getIp(), user: cisco.getUser(), pass: '', enablePass: '', enabled: cisco.isEnabled(), hostFp: cisco.getHostFp() },
     asus:    { ip: asus.getRouterIp(), user: asus.getUser(), pass: '', enabled: asus.isEnabled() },
     general: { homeCountry: appState.homeCountry, language: appState.uiLanguage, autoInvestigate: appState.autoInvestigate, retentionDays: appState.retentionDays },
     backup:  backup.getConfig(),
@@ -251,6 +263,7 @@ function saveConfig() {
   try {
     const existing = configIo.loadFile(CONFIG_FILE);
     if (existing.yamaha?.pass) data.yamaha.pass = existing.yamaha.pass;
+    if (existing.cisco?.pass)  { data.cisco.pass = existing.cisco.pass; data.cisco.enablePass = existing.cisco.enablePass || ''; }
     if (existing.asus?.pass)   data.asus.pass   = existing.asus.pass;
     if (existing.slack?.token) data.slack.token = existing.slack.token;
   } catch {}
@@ -463,10 +476,61 @@ async function pollYamahaConnections() {
     if (err.message.includes('timeout')) {
       logger.warn('[yamaha] Timeout detected, resetting connection…');
       yamaha.reconnect();
-      // fall through so setTimeout still runs — otherwise polling stops permanently
     }
   } finally {
     if (yamaha.isEnabled()) setTimeout(pollYamahaConnections, POLL_INTERVAL);
+  }
+}
+
+async function pollCiscoConnections() {
+  if (!cisco.isEnabled()) return;
+  try {
+    if (!cisco.isReady()) {
+      logger.debug('[cisco] poll skipped: not ready');
+      return;
+    }
+    const sessions = await cisco.fetchSessions();
+    logger.debug(`[cisco] ${sessions.length} sessions parsed`);
+
+    const unique = [...new Set(sessions.map(s => s.dst))];
+    queueConnectionEnrichment(unique);
+
+    const now = Date.now();
+    if (cisco.needsArpRefresh()) await cisco.refreshArp();
+    if (cisco.needsNdpRefresh()) {
+      await cisco.refreshNdp();
+      for (const [ip, mac] of cisco.getArpCache()) {
+        const ipv6 = cisco.getNdpByMac(mac);
+        if (ipv6 && ipv6.length) {
+          devices.observeDevice({ ip, mac, ipv6Addr: ipv6[0], lastSeen: Date.now(), source: 'ndp' });
+        }
+      }
+    }
+
+    sessions.forEach(s => runtime.recordConnection(s, now));
+
+    history.pruneHistory();
+
+    const deltaConns = [...history.getConnectionHistory().values()]
+      .filter(c => c.lastSeen > lastPollEmitTime);
+    lastPollEmitTime = now;
+    if (deltaConns.length > 0) {
+      io.emit('connections-update', {
+        connections: deltaConns,
+        serverTime:  now,
+        partial:     true,
+        delta:       true,
+      });
+      logger.debug(`[cisco] emit delta: ${deltaConns.length} connections`);
+    }
+  } catch (err) {
+    logger.error('[cisco] poll error:', err.message);
+    if (err.message.includes('timeout')) {
+      logger.warn('[cisco] Timeout detected, resetting connection…');
+      cisco.reconnect();
+    }
+  } finally {
+    if (cisco.isEnabled()) setTimeout(pollCiscoConnections, POLL_INTERVAL);
   }
 }
 
@@ -613,7 +677,7 @@ function scheduleBeaconScan() {
 const routeCtx = {
   requireAdmin,
   getAdminToken:       () => appState.adminToken,
-  asus, yamaha, enrichment, threatIntel, notifier, history, devices, deviceId, backup,
+  asus, yamaha, cisco, enrichment, threatIntel, notifier, history, devices, deviceId, backup,
   dnsmasqLog, inspectSyslog, dhcpdSyslog,
   runtime, notes, io, beacons, sessions, authPassword,
   saveConfig,
@@ -673,6 +737,11 @@ io.on('connection', socket => {
     yamahaNat:      yamaha.getNat(),
     yamahaPassSet:  yamaha.hasPass(),
     yamahaReady:    yamaha.isReady(),
+    ciscoEnabled:   cisco.isEnabled(),
+    ciscoIp:        cisco.getIp(),
+    ciscoUser:      cisco.getUser(),
+    ciscoPassSet:   cisco.hasPass(),
+    ciscoReady:     cisco.isReady(),
     homeCountry:    appState.homeCountry,
     language:       appState.uiLanguage,
     autoInvestigate: appState.autoInvestigate,
@@ -727,6 +796,15 @@ yamaha.configure({
   natDescriptor: process.env.YAMAHA_NAT  || '100',
   onStatus:      (status) => io.emit('yamaha-status', status),
   onSaveConfig:  saveConfig,
+});
+
+cisco.configure({
+  ip:         process.env.CISCO_IP          || '',
+  user:       process.env.CISCO_USER        || '',
+  pass:       process.env.CISCO_PASS        || '',
+  enablePass: process.env.CISCO_ENABLE_PASS || '',
+  onStatus:   (status) => io.emit('cisco-status', status),
+  onSaveConfig: saveConfig,
 });
 
 asus.configure({
@@ -833,6 +911,11 @@ server.listen(PORT, () => {
     yamaha.connect(() => {
       yamaha.refreshArp().then(() => pollYamahaConnections());
     });
+    if (cisco.isEnabled()) {
+      cisco.connect(() => {
+        cisco.refreshArp().then(() => pollCiscoConnections());
+      });
+    }
     dnsmasqLog.start();
     inspectSyslog.start();
     dhcpdSyslog.start();

@@ -49,9 +49,12 @@ socket.on('auth-required', () => {
 
 socket.on('yamaha-status', s => {
   showStatus('yamaha-status', s.message, s.ready);
-  connState.l3l4.enabled = yamahaConfigured;
-  connState.l3l4.ready   = s.ready;
-  connState.l3l4.err     = s.ready ? '' : (s.state || 'failed');
+  if (s.ready) connState.l3l4.ready = true;
+  else if (!document.getElementById('enable-cisco')?.checked) {
+    connState.l3l4.ready = false;
+    connState.l3l4.err   = s.state || 'failed';
+  }
+  connState.l3l4.enabled = yamahaConfigured || !!document.getElementById('enable-cisco')?.checked;
   updateConnBadge('l3l4');
   if (!s.ready && connState.l3l4.err === 'failed' && yamahaConfigured && !asusActive) {
     const banner = document.getElementById('disconnected-banner');
@@ -61,7 +64,26 @@ socket.on('yamaha-status', s => {
   }
   if (s.ready) {
     document.getElementById('disconnected-banner').style.display = 'none';
-    // settingsBtn alert cleared via auth-socket updateConnBadge
+  }
+});
+
+socket.on('cisco-status', s => {
+  showStatus('cisco-status', s.message, s.ready);
+  if (s.ready) connState.l3l4.ready = true;
+  else if (!document.getElementById('enable-yamaha')?.checked) {
+    connState.l3l4.ready = false;
+    connState.l3l4.err   = s.state || 'failed';
+  }
+  connState.l3l4.enabled = !!document.getElementById('enable-cisco')?.checked || yamahaConfigured;
+  updateConnBadge('l3l4');
+  if (!s.ready && connState.l3l4.err === 'failed' && !asusActive) {
+    const banner = document.getElementById('disconnected-banner');
+    banner.style.display = 'block';
+    banner.querySelector('button').textContent = t('banner.cisco');
+    banner.querySelector('button').onclick = () => openSettings('l3l4');
+  }
+  if (s.ready) {
+    document.getElementById('disconnected-banner').style.display = 'none';
   }
 });
 

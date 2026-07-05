@@ -41,7 +41,9 @@ document.querySelectorAll('.settings-tab').forEach(tab => {
 // Checkbox toggles enable/disable of input fields and updates the button label
 function connectButtonLabel(btnId, enabled) {
   if (!enabled) return t('settings.btn.disable');
-  return btnId === 'yamaha-connect-btn' ? t('settings.yamaha.saveSuggested') : t('settings.btn.connect');
+  if (btnId === 'yamaha-connect-btn') return t('settings.yamaha.saveSuggested');
+  if (btnId === 'cisco-connect-btn')  return t('settings.cisco.saveSuggested');
+  return t('settings.btn.connect');
 }
 
 function toggleSection(inputsId, checkboxId, btnId) {
@@ -53,6 +55,8 @@ function toggleSection(inputsId, checkboxId, btnId) {
 }
 document.getElementById('enable-yamaha').addEventListener('change',
   () => toggleSection('yamaha-inputs', 'enable-yamaha', 'yamaha-connect-btn'));
+document.getElementById('enable-cisco').addEventListener('change',
+  () => toggleSection('cisco-inputs', 'enable-cisco', 'cisco-connect-btn'));
 document.getElementById('enable-asus').addEventListener('change',
   () => toggleSection('asus-inputs', 'enable-asus', 'asus-connect-btn'));
 
@@ -201,6 +205,101 @@ document.getElementById('yamaha-connect-btn').addEventListener('click', async ()
     if (doYamaha && body.yamahaIp) connState.l3l4.ip = body.yamahaIp;
     updateConnBadge('l3l4');
     if (!doYamaha) {
+      setAllConnections([]);
+      setDataRangeFrom(Date.now() - 86400_000);
+      if (!asusActive) stopGraph();
+      else if (simulation) updateOrgGraph();
+    }
+  }
+});
+
+// ── Cisco detect ─────────────────────────────────────────────────────────────
+
+function renderCiscoDetectStatus(data, ok) {
+  const el = document.getElementById('cisco-detect-status');
+  const lanIp = data?.lan?.ip || data?.diag?.lanIp || '-';
+  const sessionsText = data?.nat?.sessionsOk
+    ? (data.nat.sessions > 0 ? `${data.nat.sessions} ${t('settings.cisco.sessions')}` : t('settings.cisco.sessionsOk'))
+    : t('settings.cisco.sessionsFailed');
+  let lines;
+  if (ok && data?.nat?.ok) {
+    lines = [
+      `✓ ${t('settings.cisco.sshOk')}`,
+      `  ${t('settings.cisco.lanIp')}: ${lanIp}`,
+      `  ${t('settings.cisco.natSessions')}: ${sessionsText}`,
+      `✓ ${t('settings.cisco.suggestedReady')}`,
+    ];
+  } else if (data?.diag?.ssh?.ok === false) {
+    const code = data.diag.ssh.code || 'unknown';
+    lines = [
+      `✗ ${t('settings.cisco.sshFailed')}`,
+      `  ${t('settings.cisco.sshError.' + code)}`,
+    ];
+  } else {
+    lines = [data?.code ? t('err.' + data.code) : (data?.error || t('settings.cisco.detectFailed'))];
+  }
+  el.textContent = lines.join('\n');
+  el.className = 'settings-status ' + (ok ? 'ok' : 'err');
+  el.style.display = 'block';
+  el.style.whiteSpace = 'pre-line';
+}
+
+document.getElementById('cisco-detect-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('cisco-detect-btn');
+  const passEl = document.getElementById('s-cisco-pass');
+  const hasSavedPass = passEl.dataset.saved === 'true';
+  const ip   = document.getElementById('s-cisco-ip').value.trim();
+  const user = document.getElementById('s-cisco-user').value.trim();
+  const pass = passEl.value;
+  if (!ip)   { showStatus('cisco-detect-status', t('err.ipRequired'),   false); return; }
+  if (!user) { showStatus('cisco-detect-status', t('err.userRequired'), false); return; }
+  if (!pass && !hasSavedPass) { showStatus('cisco-detect-status', t('err.passRequired'), false); return; }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>' + t('settings.cisco.detecting');
+  document.getElementById('cisco-status').style.display = 'none';
+  try {
+    const body = { ciscoIp: ip, ciscoUser: user };
+    if (pass) body.ciscoPass = pass;
+    const enablePass = document.getElementById('s-cisco-enable-pass').value;
+    if (enablePass) body.ciscoEnablePass = enablePass;
+    const res = await apiFetch(_BASE+'/api/cisco/detect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) { renderCiscoDetectStatus(data, false); return; }
+    if (data.suggested?.ciscoIp)   document.getElementById('s-cisco-ip').value   = data.suggested.ciscoIp;
+    if (data.suggested?.ciscoUser) document.getElementById('s-cisco-user').value = data.suggested.ciscoUser;
+    renderCiscoDetectStatus(data, true);
+  } catch (err) {
+    renderCiscoDetectStatus({ error: t('err.serverGeneric') + err.message }, false);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t('settings.cisco.detect');
+  }
+});
+
+// Apply Cisco settings (L3/L4 tab)
+document.getElementById('cisco-connect-btn').addEventListener('click', async () => {
+  const doCisco = document.getElementById('enable-cisco').checked;
+  const body = { doCisco };
+  if (doCisco) {
+    body.ciscoIp   = document.getElementById('s-cisco-ip').value.trim()   || undefined;
+    body.ciscoUser = document.getElementById('s-cisco-user').value.trim() || undefined;
+    const pw = document.getElementById('s-cisco-pass').value;
+    if (pw) body.ciscoPass = pw;
+    const ep = document.getElementById('s-cisco-enable-pass').value;
+    if (ep) body.ciscoEnablePass = ep;
+  }
+  const ok = await connectRouter(body, 'cisco-status', 'cisco-connect-btn', 'enable-cisco');
+  if (ok) {
+    connState.l3l4.enabled = doCisco;
+    connState.l3l4.ready   = false;
+    connState.l3l4.err     = '';
+    if (doCisco && body.ciscoIp) connState.l3l4.ip = body.ciscoIp;
+    updateConnBadge('l3l4');
+    if (!doCisco) {
       setAllConnections([]);
       setDataRangeFrom(Date.now() - 86400_000);
       if (!asusActive) stopGraph();

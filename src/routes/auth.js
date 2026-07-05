@@ -23,7 +23,7 @@ const { t } = require('../i18n-server');
 module.exports = function authRoutes(ctx) {
   const {
     requireAdmin, getAdminToken,
-    asus, yamaha,
+    asus, yamaha, cisco,
     saveConfig, persistSecret, loadConfig,
     DEFAULT_ROUTER_IP, POLL_INTERVAL,
     setLatestConnections,
@@ -270,18 +270,54 @@ module.exports = function authRoutes(ctx) {
     }
   });
 
+  // ── Cisco read-only auto-detection ─────────────────────────────────────────
+  router.post('/cisco/detect', requireAdmin, async (req, res) => {
+    const { ciscoIp: cIp, ciscoUser: cUser, ciscoPass: cPass, ciscoEnablePass: cEnablePass } = req.body || {};
+    if (cIp !== undefined && cIp !== '' && !isAllowedRouterIp(cIp)) {
+      return res.status(400).json({ code: 'routerIpPrivate', error: t('auth.yamaha-ip-private') });
+    }
+    if (typeof cUser === 'string' && cUser.length > 64)  return res.status(400).json({ error: t('auth.username-too-long') });
+    if (typeof cPass === 'string' && cPass.length > 256)  return res.status(400).json({ error: t('auth.password-too-long') }); // pragma: allowlist secret
+
+    let stored = {};
+    try { stored = loadConfig().cisco || {}; } catch {}
+    const ip   = cIp   || cisco.getIp()   || stored.ip   || '';
+    const user = cUser || cisco.getUser() || stored.user || '';
+    const pass = cPass || stored.pass || '';
+    if (!ip || !user || !pass) {
+      return res.status(400).json({ code: 'ciscoDetectMissing', error: t('cisco.no-config') });
+    }
+
+    try {
+      const sameConfiguredRouter = cisco.isReady() && ip === cisco.getIp() && user === cisco.getUser();
+      const result = sameConfiguredRouter
+        ? await cisco.detectCurrent()
+        : await cisco.detect({
+            ip, user, pass,
+            enablePass: cEnablePass || stored.enablePass || '',
+            expectedHostFp: cisco.getHostFp() || stored.hostFp || '',
+          });
+      res.json({ success: true, ...result });
+    } catch (err) {
+      logger.error('[auth] Cisco auto-detect failed:', err.message);
+      res.status(502).json({ success: false, code: 'ciscoDetectFailed', error: t('cisco.no-config'), diag: err.diag || null });
+    }
+  });
+
   // ── Login / setup ───────────────────────────────────────────────────────────
   router.post('/login', requireAdmin, async (req, res) => {
     const { username, password,
             routerIp: ip,
             yamahaIp: yIp, yamahaUser: yUser, yamahaPass: yPass, yamahaNat: yNat,
-            doAsus, doYamaha } = req.body || {};
+            ciscoIp: cIp, ciscoUser: cUser, ciscoPass: cPass, ciscoEnablePass: cEnablePass,
+            doAsus, doYamaha, doCisco } = req.body || {};
 
-    if (doAsus === undefined && doYamaha === undefined) {
+    if (doAsus === undefined && doYamaha === undefined && doCisco === undefined) {
       return res.status(400).json({ error: t('auth.no-target') });
     }
     if (ip   !== undefined && ip   !== '' && !isAllowedRouterIp(ip))  return res.status(400).json({ error: t('auth.asus-ip-private') });
     if (yIp  !== undefined && yIp  !== '' && !isAllowedRouterIp(yIp)) return res.status(400).json({ error: t('auth.yamaha-ip-private') });
+    if (cIp  !== undefined && cIp  !== '' && !isAllowedRouterIp(cIp)) return res.status(400).json({ error: t('auth.yamaha-ip-private') });
     if (typeof username === 'string' && username.length > 64)         return res.status(400).json({ error: t('auth.username-too-long') });
     if (typeof password === 'string' && password.length > 256)        return res.status(400).json({ error: t('auth.password-too-long') }); // pragma: allowlist secret
     if (yNat !== undefined && yNat !== '' && !/^\d{1,6}$/.test(String(yNat))) return res.status(400).json({ error: t('auth.yamaha-nat-invalid') });
@@ -339,6 +375,39 @@ module.exports = function authRoutes(ctx) {
       setLatestConnections([]);
       saveConfig();
       logger.info('[auth] Yamaha disabled');
+    }
+
+    // ── Cisco ──
+    if (doCisco === true) {
+      try {
+        const storedCisco = cfg.cisco;
+        const finalCiscoIp   = cIp   || cisco.getIp()   || storedCisco?.ip   || '';
+        const finalCiscoUser = cUser || cisco.getUser() || storedCisco?.user || '';
+        const hasCiscoPass   = !!cPass || cisco.hasPass() || !!(storedCisco?.pass);
+        if (!finalCiscoIp || !finalCiscoUser || !hasCiscoPass) {
+          return res.status(400).json({ error: t('cisco.no-config') });
+        }
+        cisco.configure({ enabled: true, ip: finalCiscoIp, user: finalCiscoUser });
+        if (cEnablePass) cisco.configure({ enablePass: cEnablePass });
+        if (cPass) {
+          persistSecret('cisco', {
+            ip: finalCiscoIp, user: finalCiscoUser, pass: cPass,
+            enablePass: cEnablePass || storedCisco?.enablePass || '',
+            enabled: true,
+          });
+          cisco.configure({ pass: cPass });
+        }
+        cisco.reconnect();
+        saveConfig();
+        logger.info(`[auth] Cisco config updated: ${cisco.getIp()}`);
+      } catch (err) {
+        logger.error('[auth] Cisco config failed:', err.message);
+        return res.status(502).json({ success: false, error: t('cisco.init-failed') + err.message });
+      }
+    } else if (doCisco === false) {
+      cisco.disconnect();
+      saveConfig();
+      logger.info('[auth] Cisco disabled');
     }
 
     res.json({ success: true, routerIp: doAsus ? asus.getRouterIp() : undefined });
