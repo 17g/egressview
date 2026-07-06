@@ -17,6 +17,8 @@ No new hardware. No inline traffic interception. Works via your existing Yamaha 
 
 EgressView is production-oriented for Yamaha RTX based home/SOHO networks. ASUS AP support and optional data sources are maintained as companion integrations. Other router families are tracked on the roadmap. Security fixes are applied to `main`; run `npm run release:check` before publishing or tagging a release.
 
+Cisco router support is currently a **sample implementation**. It has not yet been validated on physical Cisco hardware, so it is not a formal release target yet. It will be promoted to an official release after real-device testing is completed.
+
 ## For Home / SOHO Security
 
 Modern home and SOHO networks run 20–40 devices: smart TVs, IP cameras, NAS drives, Wi-Fi speakers, printers, network switches, PCs, and smartphones. Many of these — especially IoT equipment — update infrequently and have unknown outbound behaviors. Any of them can be silently compromised and begin exfiltrating data or relaying traffic for a botnet.
@@ -32,6 +34,7 @@ EgressView answers the question most home users can't ask: *what is each device 
 ## What it does
 
 - Connects to a **Yamaha RTX** router via SSH and reads the NAT session table every 60 seconds
+- Includes a **Cisco IOS (SSH)** path as a sample implementation for NAT session collection; not yet validated on physical hardware and therefore not yet a formal release target
 - **[INSPECT] syslog supplement** — tails the Yamaha syslog in real time to capture short-lived TCP sessions that complete within the 60-second polling gap
 - **dnsmasq DNS query log** — tails the EC2/server-side dnsmasq log to resolve destination IPs to meaningful domain names (e.g. `example.com`) per client device; forward DNS names take priority over PTR reverse lookups
 - **[DHCPD] syslog tracking** — tails Yamaha DHCP events (Allocates/Extends) for real-time IP→MAC mapping
@@ -99,6 +102,7 @@ Connection Log and Devices let you drill down into suspicious destinations, nois
 
 - **Node.js** 22+
 - **Yamaha RTX** router with SSH access enabled (RTX1200, RTX1210, RTX1220, RTX1300, etc.)
+- (Optional / beta) **Cisco IOS** router with SSH access enabled; sample implementation only until real-device validation is complete
 - (Optional) **ASUS WiFi access point** with web admin enabled (used as AP/mesh mode, not as a router)
 
 ## AI Agent Access (MCP)
@@ -172,6 +176,7 @@ Start with the smallest path that matches your network, then add sources later f
 |--|-------------|-------------|
 | ✅ | Node.js 22+ installed on your Mac/PC/Raspberry Pi | [nodejs.org](https://nodejs.org) |
 | ✅ | Yamaha RTX router with SSH enabled | [Setup guide →](docs/setup-yamaha.md) |
+| ☐ | (Optional / beta) Cisco IOS router with SSH enabled | [Setup guide →](docs/setup-cisco.md) |
 | ☐ | (Optional) ASUS WiFi AP with web admin enabled | [Setup guide →](docs/setup-asus.md) |
 | ☐ | (Optional) AI assistant access via MCP (AWS Kiro, Anthropic Claude, Anysphere Cursor…) | [Setup guide →](docs/setup-mcp.md) |
 
@@ -206,9 +211,12 @@ Open the Settings panel (⚙) and enter your router details:
 |-------|-----------------|
 | Yamaha RTX IP | Your router's LAN IP (e.g. `192.168.1.1`) |
 | SSH username / password | The login you set up in [Yamaha setup guide](docs/setup-yamaha.md) |
+| Cisco IOS IP / username / password | The login you set up in the [Cisco setup guide](docs/setup-cisco.md) |
 | ASUS AP IP / password | The AP's LAN IP and admin password ([ASUS setup guide](docs/setup-asus.md)) |
 
 For the Yamaha RTX, click **Connect & Auto-detect** after entering the IP, username, and password. EgressView checks SSH access, detects the NAT descriptor (usually `100`), finds the LAN IP when available, verifies that NAT sessions can be read, and fills the recommended setting before you save.
+
+For Cisco IOS, the Settings panel also provides **Connect & Auto-detect** and save actions, but this path is still a sample implementation. Physical-device validation is still pending, so treat it as beta until the real-device test pass is complete.
 
 Within a few seconds, devices, sessions, and statistics will start appearing in the UI.
 

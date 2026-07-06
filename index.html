@@ -193,6 +193,7 @@
 <header>
   <h1><span>EgressView</span></h1>
   <p>Where Is Data Exiting? Map All Paths. — Know what every device on your home or SOHO network is actually connecting to. Graph Map and Statistics for the overview; Connection Log and Devices for drill-down investigation. Automatic threat detection and Slack alerts. Ask AWS Kiro, Anthropic Claude, Anysphere Cursor, or another MCP-capable assistant about your network via the built-in MCP server.</p>
+  <p style="font-size:0.85rem; color:var(--orange); max-width:720px;">Cisco router support is currently a sample implementation. Physical-device validation has not been completed yet, so it should be treated as beta until real-device testing is done.</p>
   <div class="badges">
     <a href="https://opensource.org/licenses/AGPL-3.0"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
     <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node.js 22+"></a>
@@ -258,6 +259,10 @@
       <div class="card">
         <h3>Yamaha RTX Integration</h3>
         <p>SSH into your Yamaha RTX router and read NAT session tables every 60 seconds. [INSPECT] syslog fills in short-lived TCP sessions missed between polls. Supports RTX1200–RTX1300, RTX810/830.</p>
+      </div>
+      <div class="card">
+        <h3>Cisco IOS (Beta)</h3>
+        <p>Includes a sample SSH-based Cisco IOS path for NAT session collection. Physical-device validation is still pending, so this remains a beta path rather than a formal release target.</p>
       </div>
       <div class="card">
         <h3>ASUS WiFi AP Support</h3>
@@ -378,6 +383,11 @@
         </tr>
         <tr style="border-bottom:1px solid var(--border);">
           <td style="padding:8px 6px; color:var(--muted);">☐</td>
+          <td style="padding:8px 6px; color:var(--muted);">(Optional / beta) Cisco IOS router — SSH access enabled</td>
+          <td style="padding:8px 6px; text-align:right;"><a href="https://github.com/yo1t/egressview/blob/main/docs/setup-cisco.md">Setup guide →</a></td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px 6px; color:var(--muted);">☐</td>
           <td style="padding:8px 6px; color:var(--muted);">(Optional) ASUS WiFi AP — web admin enabled</td>
           <td style="padding:8px 6px; text-align:right;"><a href="https://github.com/yo1t/egressview/blob/main/docs/setup-asus.md">Setup guide →</a></td>
         </tr>
@@ -414,6 +424,10 @@ npm start</code></pre>
           <td style="padding:6px 8px;">Set up in the <a href="https://github.com/yo1t/egressview/blob/main/docs/setup-yamaha.md">Yamaha guide</a></td>
         </tr>
         <tr>
+          <td style="padding:6px 8px; color:var(--muted);">Cisco IOS IP / username / password</td>
+          <td style="padding:6px 8px;">Set up in the <a href="https://github.com/yo1t/egressview/blob/main/docs/setup-cisco.md">Cisco guide</a></td>
+        </tr>
+        <tr>
           <td style="padding:6px 8px; color:var(--muted);">ASUS AP IP / password</td>
           <td style="padding:6px 8px;">AP's LAN IP and admin password (<a href="https://github.com/yo1t/egressview/blob/main/docs/setup-asus.md">ASUS guide</a>)</td>
         </tr>
@@ -430,6 +444,10 @@ npm start</code></pre>
       <div class="card">
         <h3>Yamaha RTX (L3/L4)</h3>
         <p>RTX1200, RTX1210, RTX1220, RTX1300, RTX810, RTX830, NVR500, NVR510, NVR700W — any model with SSH + NAT descriptor.</p>
+      </div>
+      <div class="card">
+        <h3>Cisco IOS (beta)</h3>
+        <p>Sample implementation only for now. Physical-device validation is still pending before formal release.</p>
       </div>
       <div class="card">
         <h3>ASUS WiFi AP (L2)</h3>
@@ -477,6 +495,10 @@ npm start</code></pre>
       <div class="card">
         <h3><a href="https://github.com/yo1t/egressview/blob/main/docs/setup-yamaha.md">Yamaha RTX Setup Guide</a></h3>
         <p>Step-by-step guide to enable SSH on your Yamaha RTX router.</p>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/yo1t/egressview/blob/main/docs/setup-cisco.md">Cisco IOS Setup Guide</a></h3>
+        <p>Beta / sample implementation guide for trying EgressView with Cisco IOS over SSH.</p>
       </div>
       <div class="card">
         <h3><a href="https://github.com/yo1t/egressview/blob/main/docs/setup-asus.md">ASUS AP Setup Guide</a></h3>
