@@ -17,6 +17,17 @@ EgressView currently expects a Cisco IOS device that can:
 
 If your device, IOS version, or privilege model behaves differently, auto-detection or polling may fail.
 
+If you find an error on real hardware, please open a GitHub Issue with:
+
+- router model
+- IOS version
+- whether `enable` is required
+- redacted output from `show ip nat translations`
+- redacted output from `show arp`
+- relevant EgressView logs
+
+Pull requests are especially helpful when they include a redacted fixture and parser test for the failing output format.
+
 ---
 
 ## Step 1 — Enable SSH access

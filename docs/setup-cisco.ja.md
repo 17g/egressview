@@ -17,6 +17,17 @@ EgressView で Cisco IOS ルータを試すための準備手順です。
 
 機種、IOS バージョン、権限設計によっては、自動検出や定期取得が期待通りに動かない場合があります。
 
+実機でエラーを見つけた場合は、GitHub Issue で以下を共有してください。
+
+- ルータの機種名
+- IOS バージョン
+- `enable` が必要かどうか
+- 機密情報をマスクした `show ip nat translations` の出力
+- 機密情報をマスクした `show arp` の出力
+- 関連する EgressView のログ
+
+未対応の出力形式については、機密情報をマスクした fixture とパーサテストを含む Pull Request も歓迎します。
+
 ---
 
 ## Step 1 — SSH アクセスを有効化

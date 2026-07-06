@@ -19,6 +19,8 @@ EgressView is production-oriented for Yamaha RTX based home/SOHO networks. ASUS 
 
 Cisco router support is currently a **sample implementation**. It has not yet been validated on physical Cisco hardware, so it is not a formal release target yet. It will be promoted to an official release after real-device testing is completed.
 
+If you test Cisco IOS support on real hardware and find an error, unsupported output format, or device-specific behavior, please open a GitHub Issue. Pull requests with redacted fixtures and parser fixes are also welcome.
+
 ## For Home / SOHO Security
 
 Modern home and SOHO networks run 20–40 devices: smart TVs, IP cameras, NAS drives, Wi-Fi speakers, printers, network switches, PCs, and smartphones. Many of these — especially IoT equipment — update infrequently and have unknown outbound behaviors. Any of them can be silently compromised and begin exfiltrating data or relaying traffic for a botnet.
@@ -72,17 +74,21 @@ Connection Log and Devices let you drill down into suspicious destinations, nois
 ## Architecture
 
 ```
-┌─────────────────┐  SSH (NAT)  ┌──────────────────────┐
-│  Yamaha RTX     │◄───────────►│                      │  WebSocket   ┌──────────────────┐
-│  [INSPECT] log  │  syslog/UDP │   EgressView Server  │◄────────────►│ Browser          │
-│  [DHCPD] log    │────────────►│   (Node.js)          │  MCP         ├──────────────────┤
-└─────────────────┘             │                      │◄────────────►│ AI Assistant     │
-┌─────────────────┐  HTTP       │  Pollers:            │  stdio/HTTP  │ (Kiro, Claude…)  │
-│  ASUS WiFi AP   │◄───────────►│  • yamaha (SSH)      │              └──────────────────┘
-│  (Client list)  │             │  • asus (HTTP)       │
-└─────────────────┘             │  • inspect-syslog    │
-┌─────────────────┐  tail -F    │  • dhcpd-syslog      │
-│  dnsmasq        │────────────►│  • dnsmasq-log       │
+┌─────────────────┐  SSH (NAT)  ┌──────────────────────┐  WebSocket   ┌──────────────────┐
+│  Yamaha RTX     │◄───────────►│                      │◄────────────►│ Browser          │
+│  [INSPECT] log  │  syslog/UDP │   EgressView Server  │  MCP         ├──────────────────┤
+│  [DHCPD] log    │────────────►│   (Node.js)          │◄────────────►│ AI Assistant     │
+└─────────────────┘             │                      │  stdio/HTTP  │ (Kiro, Claude…)  │
+┌─────────────────┐  SSH (NAT)  │  Pollers:            │              └──────────────────┘
+│  Cisco IOS      │◄───────────►│  • yamaha (SSH)      │
+│  (beta sample)  │             │  • cisco (SSH, beta) │
+└─────────────────┘             │  • asus (HTTP)       │
+┌─────────────────┐  HTTP       │  • inspect-syslog    │
+│  ASUS WiFi AP   │◄───────────►│  • dhcpd-syslog      │
+│  (Client list)  │             │  • dnsmasq-log       │
+└─────────────────┘             │                      │
+┌─────────────────┐  tail -F    │                      │
+│  dnsmasq        │────────────►│                      │
 │  query log      │             └──────────┬───────────┘
 └─────────────────┘                        │
                        ┌───────────────────┼───────────────┐

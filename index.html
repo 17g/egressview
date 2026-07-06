@@ -193,7 +193,7 @@
 <header>
   <h1><span>EgressView</span></h1>
   <p>Where Is Data Exiting? Map All Paths. — Know what every device on your home or SOHO network is actually connecting to. Graph Map and Statistics for the overview; Connection Log and Devices for drill-down investigation. Automatic threat detection and Slack alerts. Ask AWS Kiro, Anthropic Claude, Anysphere Cursor, or another MCP-capable assistant about your network via the built-in MCP server.</p>
-  <p style="font-size:0.85rem; color:var(--orange); max-width:720px;">Cisco router support is currently a sample implementation. Physical-device validation has not been completed yet, so it should be treated as beta until real-device testing is done.</p>
+  <p style="font-size:0.85rem; color:var(--orange); max-width:720px;">Cisco router support is currently a sample implementation. Physical-device validation has not been completed yet, so it should be treated as beta until real-device testing is done. Real-hardware issue reports and fixture-based pull requests are welcome.</p>
   <div class="badges">
     <a href="https://opensource.org/licenses/AGPL-3.0"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
     <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D22-green" alt="Node.js 22+"></a>
@@ -337,17 +337,21 @@
   <section id="architecture">
     <h2><span class="icon">⬡</span> Architecture</h2>
     <div class="arch-block">
-      <pre><code>┌─────────────────┐  SSH(NAT)   ┌──────────────────────┐
-│  Yamaha RTX     │◄───────────►│                      │  WebSocket   ┌──────────────────┐
-│  [INSPECT] log  │  syslog/UDP │   EgressView Server  │◄────────────►│ Browser          │
-│  [DHCPD] log    │────────────►│   (Node.js)          │  MCP         ├──────────────────┤
-└─────────────────┘             │                      │◄────────────►│ AI Assistant     │
-┌─────────────────┐  HTTP       │  Pollers:            │  stdio/HTTP  │ (Kiro, Claude…)  │
-│  ASUS WiFi AP   │◄───────────►│  • yamaha (SSH)      │              └──────────────────┘
-│  (Client list)  │             │  • asus (HTTP)       │
-└─────────────────┘             │  • inspect-syslog    │
-┌─────────────────┐  tail -F    │  • dhcpd-syslog      │
-│  dnsmasq        │────────────►│  • dnsmasq-log       │
+      <pre><code>┌─────────────────┐  SSH(NAT)   ┌──────────────────────┐  WebSocket   ┌──────────────────┐
+│  Yamaha RTX     │◄───────────►│                      │◄────────────►│ Browser          │
+│  [INSPECT] log  │  syslog/UDP │   EgressView Server  │  MCP         ├──────────────────┤
+│  [DHCPD] log    │────────────►│   (Node.js)          │◄────────────►│ AI Assistant     │
+└─────────────────┘             │                      │  stdio/HTTP  │ (Kiro, Claude…)  │
+┌─────────────────┐  SSH(NAT)   │  Pollers:            │              └──────────────────┘
+│  Cisco IOS      │◄───────────►│  • yamaha (SSH)      │
+│  (beta sample)  │             │  • cisco (SSH, beta) │
+└─────────────────┘             │  • asus (HTTP)       │
+┌─────────────────┐  HTTP       │  • inspect-syslog    │
+│  ASUS WiFi AP   │◄───────────►│  • dhcpd-syslog      │
+│  (Client list)  │             │  • dnsmasq-log       │
+└─────────────────┘             │                      │
+┌─────────────────┐  tail -F    │                      │
+│  dnsmasq        │────────────►│                      │
 │  query log      │             └──────────┬───────────┘
 └─────────────────┘                        │
                        ┌───────────────────┼───────────────┐
