@@ -238,7 +238,7 @@ function lookupGeoBatch(ips) {
         geoPendingIps.clear();
         geoFlushPromise = null; // 以降の呼び出しは次のサイクルへ
         _fetchGeoBatch(batch).then(resolve, resolve);
-      }, GEO_FLUSH_MS).unref?.();
+      }, GEO_FLUSH_MS);
     });
   }
   return geoFlushPromise;
