@@ -33,6 +33,8 @@ document.getElementById('enable-cisco').addEventListener('change',
   () => toggleSection('cisco-inputs', 'enable-cisco', 'cisco-connect-btn'));
 document.getElementById('enable-asus').addEventListener('change',
   () => toggleSection('asus-inputs', 'enable-asus', 'asus-connect-btn'));
+document.getElementById('enable-v1-asus').addEventListener('change',
+  () => toggleSection('asus-inputs', 'enable-v1-asus', 'asus-connect-btn'));
 
 async function connectRouter(body, statusId, btnId, checkboxId) {
   const btn = document.getElementById(btnId);
@@ -303,6 +305,7 @@ document.getElementById('asus-connect-btn').addEventListener('click', async () =
     body.username = document.getElementById('s-asus-user').value.trim();
     // Omit if empty (server uses saved password)
     if (passEl.value) body.password = passEl.value;
+    body.useV1 = document.getElementById('enable-v1-asus').checked;
   }
   const ok = await connectRouter(body, 'asus-status', 'asus-connect-btn', 'enable-asus');
   if (ok) {

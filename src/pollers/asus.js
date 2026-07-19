@@ -10,6 +10,7 @@ let authToken = null;
 let tokenExpiry = 0;
 let routerIp = '192.168.1.1';
 let asusEnabled = false;
+let asusLoginV1 = false;
 let lastAsusUser = '';
 let lastAsusPass = '';
 let pollTimer = null;
@@ -37,6 +38,7 @@ function configure(cfg) {
   if (cfg.enabled !== undefined) asusEnabled = cfg.enabled;
   if (cfg.user !== undefined) lastAsusUser = cfg.user;
   if (cfg.pass !== undefined) lastAsusPass = cfg.pass;
+  if (cfg.loginV1 !== undefined) asusLoginV1 = cfg.loginV1;
   if (cfg.onAuthRequired) onAuthRequired = cfg.onAuthRequired;
   if (cfg.onPollError) onPollError = cfg.onPollError;
   if (cfg.onNetworkUpdate) onNetworkUpdate = cfg.onNetworkUpdate;
@@ -45,8 +47,9 @@ function configure(cfg) {
 }
 
 // SHA256 login with the ASUS router
-async function loginToRouter(ip, username, password) {
+async function loginToRouter(ip, username, password, loginV1 = false) {
   const base = `http://${ip}`;
+  if (loginV1) return loginV1ToRouter(ip, username, password);
 
   const id = crypto.randomBytes(5).toString('hex');
   const nonceRes = await axios.post(`${base}/get_Nonce.cgi`, JSON.stringify({ id }), {
@@ -91,6 +94,43 @@ async function loginToRouter(ip, username, password) {
   if (body.includes('index.asp')) return null;
   throw new Error(t('asus.wrong-credentials'));
 }
+
+async function loginV1ToRouter(ip, username, password) {
+  const base = `http://${ip}`;
+  const params = new URLSearchParams({
+    login_authorization: Buffer.from(`${username}:${password}`).toString('base64'),
+    action_mode: '',
+    action_script: '',
+    action_wait: '5',
+    current_page: 'Main_Login.asp',
+    next_page: 'index.asp',
+    login_captcha: '',
+    group_id: '',
+  });
+
+  const res = await axios.post(`${base}/login.cgi`, params.toString(), {
+    headers: {
+       'Content-Type': 'application/x-www-form-urlencoded',
+      'Referer': `http://${ip}/Main_Login.asp`,
+      'Origin': `http://${ip}`,
+      'Host': `${ip}`,
+      'upgrade-insecure-requests': '1',
+     },
+    timeout: 8000,
+    maxRedirects: 0,
+    validateStatus: () => true,
+  });
+
+  const cookies = res.headers['set-cookie'] || [];
+  for (const c of cookies) {
+    const m = c.match(/asus_token=([^;]+)/);
+    if (m && m[1] !== 'deleted') return m[1];
+  }
+
+  const body = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+  if (body.includes('index.asp')) return null;
+  throw new Error(t('asus.wrong-credentials'));
+} 
 
 async function apiGet(hook) {
   const base = `http://${routerIp}`;
@@ -280,13 +320,14 @@ function stopPolling() {
 }
 
 // Login action (called from API route)
-async function login(ip, username, password) {
-  const token = await loginToRouter(ip, username, password);
+async function login(ip, username, password, loginV1 = false) {
+  const token = await loginToRouter(ip, username, password, loginV1);
   authToken = token;
   tokenExpiry = Date.now() + 25 * 60 * 1000;
   routerIp = ip;
   asusEnabled = true;
   lastAsusUser = username;
+  asusLoginV1 = loginV1;
   lastAsusPass = password;
   prevNetdev = {};
   prevPollTime = Date.now();
@@ -309,6 +350,7 @@ function isAuthenticated() { return !!authToken && Date.now() < tokenExpiry; }
 function getRouterIp() { return routerIp; }
 function getUser() { return lastAsusUser; }
 function hasPass() { return !!lastAsusPass; }
+function isLoginV1() { return asusLoginV1; }
 
 module.exports = {
   configure,
@@ -330,4 +372,5 @@ module.exports = {
   getRouterIp,
   getUser,
   hasPass,
+  isLoginV1,
 };

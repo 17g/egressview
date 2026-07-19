@@ -159,6 +159,7 @@ function loadConfig() {
       user:     data.asus.user || '',
       pass:     data.asus.pass || '',
       enabled:  data.asus.enabled ?? false,
+      loginV1: data.asus.loginV1 ?? false,
     });
   }
   if (data.backup) {
@@ -197,7 +198,7 @@ function saveConfig(sectionOverrides = {}) {
     ...existing,
     yamaha:  { ip: yamaha.getIp(), user: yamaha.getUser(), pass: '', enabled: yamaha.isEnabled(), hostFp: yamaha.getHostFp(), nat: yamaha.getNat() },
     cisco:   { ip: cisco.getIp(), user: cisco.getUser(), pass: '', enablePass: '', enabled: cisco.isEnabled(), hostFp: cisco.getHostFp() },
-    asus:    { ip: asus.getRouterIp(), user: asus.getUser(), pass: '', enabled: asus.isEnabled() },
+    asus:    { ip: asus.getRouterIp(), user: asus.getUser(), pass: '', enabled: asus.isEnabled(), loginV1: asus.isLoginV1() },
     general: { homeCountry: appState.homeCountry, language: appState.uiLanguage, autoInvestigate: appState.autoInvestigate, retentionDays: appState.retentionDays },
     backup:  backup.getConfig(),
     slack:   { ...notifier.getConfig(), tokenSet: undefined },

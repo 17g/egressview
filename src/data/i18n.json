@@ -104,6 +104,7 @@
     "settings.tab.general": "General",
     "settings.section.l3l4": "Yamaha RTX (SSH)",
     "settings.section.l2": "ASUS WiFi AP",
+    "settings.section.l2.login.type": "V1ログイン方式を使用",
     "settings.routers.title": "L3/L4 ルーター",
     "settings.routers.desc": "Yamaha、Cisco、Linux conntrackを合計10台まで登録できます。",
     "settings.routers.add": "ルーターを追加",

@@ -40,9 +40,10 @@ module.exports = function routerSetupRoutes(ctx) {
       user: previous.user,
       pass: previous.pass,
       enabled: previous.enabled,
+      loginV1: previous.loginV1,
     });
     if (previous.enabled && previous.user && previous.pass) {
-      await asus.login(previous.ip, previous.user, previous.pass);
+      await asus.login(previous.ip, previous.user, previous.pass, previous.loginV1);
       asus.startPolling(POLL_INTERVAL);
     }
   }
@@ -123,7 +124,7 @@ module.exports = function routerSetupRoutes(ctx) {
 
   router.post('/login', requireAdmin, async (req, res) => {
     const {
-      username, password, routerIp,
+      username, password, routerIp, useV1,
       yamahaIp, yamahaUser, yamahaPass, yamahaNat,
       ciscoIp, ciscoUser, ciscoPass, ciscoEnablePass,
       doAsus, doYamaha, doCisco,
@@ -156,13 +157,14 @@ module.exports = function routerSetupRoutes(ctx) {
         ip: asus.getRouterIp(),
         user: asus.getUser(),
         pass: storedPass,
+        loginV1: asus.isV1Login?.() ?? false,
       };
       try {
         const targetIp = routerIp || DEFAULT_ROUTER_IP;
-        await asus.login(targetIp, username, finalPass);
+        await asus.login(targetIp, username, finalPass, useV1);
         asus.startPolling(POLL_INTERVAL);
         try {
-          saveConfig({ asus: { ip: targetIp, user: username, pass: finalPass } });
+          saveConfig({ asus: { ip: targetIp, user: username, pass: finalPass, loginV1: useV1 } });
         } catch (saveErr) {
           try { await restoreAsus(previous); } catch (rollbackErr) {
             logger.error('[auth] ASUS runtime rollback failed:', rollbackErr.message);
