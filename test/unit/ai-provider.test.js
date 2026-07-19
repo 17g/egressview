@@ -117,6 +117,43 @@ describe('AI insight generation', () => {
     assert.match(result.text, /異常なし/);
   });
 
+  it('forbids tables, caps length, and honors the selected output language', async () => {
+    const prompts = {};
+    const provider = createAiProvider({ fetchImpl: async (_url, options) => {
+      prompts.last = JSON.parse(options.body).prompt;
+      return jsonResponse({ response: 'ok' });
+    } });
+    provider.configure({ provider: 'ollama', models: { ollama: 'm' } });
+
+    await provider.generateInsight({ current: {} }, { language: 'en' });
+    assert.match(prompts.last, /Respond in English/);
+    assert.match(prompts.last, /Recommended actions/);
+    assert.match(prompts.last, /Do not use tables/);
+    assert.match(prompts.last, /at most about 20 lines/);
+    assert.match(prompts.last, /false positive/i);
+
+    await provider.generateInsight({ current: {} }, { language: 'ja' });
+    assert.match(prompts.last, /Respond in Japanese/);
+    assert.match(prompts.last, /推奨アクション/);
+    assert.match(prompts.last, /Do not use tables/);
+  });
+
+  it('includes the prior analysis and question in chat prompts', async () => {
+    let sentPrompt;
+    const provider = createAiProvider({ fetchImpl: async (_url, options) => {
+      sentPrompt = JSON.parse(options.body).prompt;
+      return jsonResponse({ response: 'ok' });
+    } });
+    provider.configure({ provider: 'ollama', models: { ollama: 'm' } });
+    await provider.generateInsight({ current: {} }, {
+      question: 'なぜ危険なの？',
+      priorAnalysis: 'PRIOR-ANALYSIS-TEXT',
+      conversation: [],
+    });
+    assert.match(sentPrompt, /PRIOR-ANALYSIS-TEXT/);
+    assert.match(sentPrompt, /なぜ危険なの/);
+  });
+
   it('requires explicit cloud consent and limits concurrent work', async () => {
     const cloud = createAiProvider();
     cloud.configure({ provider: 'openai', models: { openai: 'gpt-test' }, keys: { openai: 'key' } });
@@ -150,5 +187,161 @@ describe('AI insight generation', () => {
     assert.equal(requests[0].options.headers['x-api-key'], 'anthropic-key');
     assert.equal(requests[1].url, 'https://api.openai.com/v1/responses');
     assert.equal(requests[1].options.headers.Authorization, 'Bearer openai-key');
+  });
+});
+
+describe('AI provider — Amazon Bedrock (keyless, region-based, Converse)', () => {
+  function bedrockProvider(bedrock) {
+    const provider = createAiProvider({ fetchImpl: async () => { throw new Error('fetch must not be used for bedrock'); }, bedrock });
+    return provider;
+  }
+
+  it('never exposes a key field and reports region + consent in public config', () => {
+    const provider = bedrockProvider({ converse: async () => 'x' });
+    provider.configure({ provider: 'bedrock', region: 'ap-northeast-1', models: { bedrock: 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0' }, cloudConsent: { bedrock: true } });
+    const publicConfig = provider.getPublicConfig();
+    assert.equal(publicConfig.provider, 'bedrock');
+    assert.equal(publicConfig.region, 'ap-northeast-1');
+    assert.equal(publicConfig.providers.bedrock.keySet, false);
+    assert.equal(publicConfig.providers.bedrock.consented, true);
+    assert.equal(publicConfig.models.bedrock, 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0');
+  });
+
+  it('requires region, then consent, before invoking the transport', async () => {
+    const calls = [];
+    const provider = bedrockProvider({ converse: async (args) => { calls.push(args); return 'ok'; } });
+    provider.configure({ provider: 'bedrock', models: { bedrock: 'us.anthropic.claude-haiku-4-5-v1:0' } });
+    await assert.rejects(provider.generateInsight({}), /AWS region is not configured/);
+    provider.configure({ region: 'us-east-1' });
+    await assert.rejects(provider.generateInsight({}, { cloudConsentConfirmed: true }), error => error.code === 'AI_CONSENT_REQUIRED');
+    assert.equal(calls.length, 0);
+  });
+
+  it('invokes Converse with the configured region and model/profile id, incl. jp/geo CRIS', async () => {
+    const calls = [];
+    const provider = bedrockProvider({ converse: async (args) => { calls.push(args); return '概要\n異常なし'; } });
+    provider.configure({
+      provider: 'bedrock', region: 'ap-northeast-1',
+      models: { bedrock: 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0' },
+      cloudConsent: { bedrock: true },
+    });
+    const result = await provider.generateInsight({ current: { connections: 3 } }, { cloudConsentConfirmed: true });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].region, 'ap-northeast-1');
+    assert.equal(calls[0].modelId, 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    assert.match(calls[0].prompt, /read-only network security analyst/);
+    assert.equal(result.provider, 'bedrock');
+    assert.equal(result.model, 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0');
+    assert.match(result.text, /異常なし/);
+  });
+
+  it('accepts an inference profile ARN as the model id', async () => {
+    const calls = [];
+    const provider = bedrockProvider({ converse: async (args) => { calls.push(args); return 'ok'; } });
+    const arn = 'arn:aws:bedrock:ap-northeast-1:123456789012:inference-profile/jp.anthropic.claude-sonnet-4-5-20250929-v1:0';
+    provider.configure({ provider: 'bedrock', region: 'ap-northeast-1', models: { bedrock: arn }, cloudConsent: { bedrock: true } });
+    await provider.generateInsight({}, { cloudConsentConfirmed: true });
+    assert.equal(calls[0].modelId, arn);
+  });
+
+  it('surfaces transport errors (AccessDenied / Throttling / credential / timeout)', async () => {
+    for (const message of ['AccessDenied: not authorized to InvokeModel', 'ThrottlingException', 'Unable to resolve AWS credentials', 'Bedrock request timed out']) {
+      const provider = bedrockProvider({ converse: async () => { throw new Error(message); } });
+      provider.configure({ provider: 'bedrock', region: 'us-east-1', models: { bedrock: 'us.anthropic.claude-haiku-4-5-v1:0' }, cloudConsent: { bedrock: true } });
+      await assert.rejects(provider.generateInsight({}, { cloudConsentConfirmed: true }), new RegExp(message.split(':')[0]));
+    }
+  });
+
+  it('fails clearly when no Bedrock transport is wired', async () => {
+    const provider = createAiProvider();
+    provider.configure({ provider: 'bedrock', region: 'us-east-1', models: { bedrock: 'us.anthropic.claude-haiku-4-5-v1:0' }, cloudConsent: { bedrock: true } });
+    await assert.rejects(provider.generateInsight({}, { cloudConsentConfirmed: true }), /Bedrock transport is not configured/);
+  });
+
+  it('discovery is fail-open: returns [] without a transport, ids when available', async () => {
+    const noDiscovery = createAiProvider();
+    noDiscovery.configure({ provider: 'bedrock', region: 'us-east-1', models: { bedrock: 'm' }, cloudConsent: { bedrock: true } });
+    assert.deepEqual((await noDiscovery.listModels()).models, []);
+
+    const withDiscovery = bedrockProvider({
+      converse: async () => 'x',
+      listModels: async ({ region }) => region === 'ap-northeast-1'
+        ? ['jp.anthropic.claude-sonnet-4-5-20250929-v1:0', 'jp.anthropic.claude-haiku-4-5-v1:0'] : [],
+    });
+    withDiscovery.configure({ provider: 'bedrock', region: 'ap-northeast-1', models: { bedrock: 'm' }, cloudConsent: { bedrock: true } });
+    assert.deepEqual((await withDiscovery.listModels()).models, ['jp.anthropic.claude-sonnet-4-5-20250929-v1:0', 'jp.anthropic.claude-haiku-4-5-v1:0']);
+  });
+
+  it('requires the model/profile id before invoking', async () => {
+    const provider = bedrockProvider({ converse: async () => 'x' });
+    provider.configure({ provider: 'bedrock', region: 'us-east-1', cloudConsent: { bedrock: true } });
+    await assert.rejects(provider.generateInsight({}, { cloudConsentConfirmed: true }), /bedrock model is not configured/);
+  });
+
+  it('testConnection discovers models first; no model returns candidates unverified (no converse)', async () => {
+    let converseCalls = 0;
+    const provider = bedrockProvider({
+      converse: async () => { converseCalls++; return 'ok'; },
+      listModels: async () => ['jp.anthropic.claude-sonnet-4-5-20250929-v1:0', 'jp.anthropic.claude-haiku-4-5-v1:0'],
+    });
+    provider.configure({ provider: 'bedrock', region: 'ap-northeast-1', cloudConsent: { bedrock: true } });
+    const result = await provider.testConnection();
+    assert.equal(result.verified, false);
+    assert.deepEqual(result.models, ['jp.anthropic.claude-sonnet-4-5-20250929-v1:0', 'jp.anthropic.claude-haiku-4-5-v1:0']);
+    assert.equal(converseCalls, 0, 'no InvokeModel check without a model');
+  });
+
+  it('testConnection verifies InvokeModel via converse once a model is set', async () => {
+    const calls = [];
+    const provider = bedrockProvider({
+      converse: async (args) => { calls.push(args); return 'OK'; },
+      listModels: async () => ['jp.anthropic.claude-sonnet-4-5-20250929-v1:0'],
+    });
+    provider.configure({
+      provider: 'bedrock', region: 'ap-northeast-1',
+      models: { bedrock: 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0' }, cloudConsent: { bedrock: true },
+    });
+    const result = await provider.testConnection();
+    assert.equal(result.verified, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].modelId, 'jp.anthropic.claude-sonnet-4-5-20250929-v1:0');
+  });
+
+  it('forwards Guardrails only when enabled with an id (opt-in, default off)', async () => {
+    const calls = [];
+    const provider = bedrockProvider({ converse: async (args) => { calls.push(args); return 'ok'; } });
+    provider.configure({ provider: 'bedrock', region: 'us-east-1', models: { bedrock: 'm' }, cloudConsent: { bedrock: true } });
+
+    // default: no guardrail forwarded
+    await provider.generateInsight({}, { cloudConsentConfirmed: true });
+    assert.equal(calls[0].guardrail, null);
+
+    // enabled + id: forwarded with version
+    provider.configure({ guardrail: { enabled: true, id: 'gr-123', version: '2' } });
+    await provider.generateInsight({}, { cloudConsentConfirmed: true });
+    assert.deepEqual(calls[1].guardrail, { id: 'gr-123', version: '2' });
+
+    // enabled but no id: not forwarded
+    provider.configure({ guardrail: { enabled: true, id: '', version: '' } });
+    await provider.generateInsight({}, { cloudConsentConfirmed: true });
+    assert.equal(calls[2].guardrail, null);
+
+    // id but disabled: not forwarded
+    provider.configure({ guardrail: { enabled: false, id: 'gr-123' } });
+    await provider.generateInsight({}, { cloudConsentConfirmed: true });
+    assert.equal(calls[3].guardrail, null);
+  });
+
+  it('defaults guardrail version to DRAFT and exposes guardrail in public config', async () => {
+    const calls = [];
+    const provider = bedrockProvider({ converse: async (args) => { calls.push(args); return 'ok'; } });
+    provider.configure({
+      provider: 'bedrock', region: 'us-east-1', models: { bedrock: 'm' }, cloudConsent: { bedrock: true },
+      guardrail: { enabled: true, id: 'gr-abc' },
+    });
+    await provider.generateInsight({}, { cloudConsentConfirmed: true });
+    assert.deepEqual(calls[0].guardrail, { id: 'gr-abc', version: 'DRAFT' });
+    const publicConfig = provider.getPublicConfig();
+    assert.deepEqual(publicConfig.guardrail, { enabled: true, id: 'gr-abc', version: '' });
   });
 });

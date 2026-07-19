@@ -467,7 +467,7 @@
         <div class="settings-pane" id="pane-ai">
           <div class="pane-title pane-title-static" data-i18n="settings.ai.section">AI洞察</div>
           <p class="settings-copy settings-copy-section" data-i18n="settings.ai.desc">
-            AI機能は初期状態で無効です。接続確認ではモデル一覧だけを取得し、通信データは送信しません。
+            AI機能は初期状態で無効です。接続確認は最小限のリクエストのみを行い（Bedrockは権限確認のため固定の短い文だけを送信します）、通信・端末・脅威データは送信しません。
           </p>
           <div class="form-group">
             <label class="form-label" for="s-ai-provider" data-i18n="settings.ai.provider">プロバイダー</label>
@@ -476,12 +476,53 @@
               <option value="ollama">Ollama</option>
               <option value="anthropic">Anthropic</option>
               <option value="openai">OpenAI</option>
+              <option value="bedrock">Amazon Bedrock</option>
             </select>
           </div>
           <div id="ai-provider-fields" class="section-inputs disabled">
             <div id="ai-endpoint-group" class="form-group is-hidden">
               <label class="form-label" for="s-ai-endpoint" data-i18n="settings.ai.endpoint">Ollamaエンドポイント</label>
               <input id="s-ai-endpoint" class="form-input" type="url" value="http://127.0.0.1:11434" autocomplete="off" spellcheck="false">
+            </div>
+            <div id="ai-bedrock-group" class="form-group is-hidden">
+              <label class="form-label" for="s-ai-region" data-i18n="settings.ai.region">AWSリージョン（source region）</label>
+              <select id="s-ai-region-select" class="form-input" data-i18n-title="settings.ai.regionSelect" title="よく使うリージョンから選択">
+                <option value="" data-i18n="settings.ai.modelPick">候補から選択…</option>
+                <option value="ap-northeast-1">ap-northeast-1 — Asia Pacific (Tokyo)</option>
+                <option value="ap-northeast-3">ap-northeast-3 — Asia Pacific (Osaka)</option>
+                <option value="us-east-1">us-east-1 — US East (N. Virginia)</option>
+                <option value="us-west-2">us-west-2 — US West (Oregon)</option>
+                <option value="eu-central-1">eu-central-1 — Europe (Frankfurt)</option>
+                <option value="ap-southeast-2">ap-southeast-2 — Asia Pacific (Sydney)</option>
+              </select>
+              <input id="s-ai-region" class="form-input" type="text" maxlength="64" placeholder="ap-northeast-1" autocomplete="off" spellcheck="false">
+              <p class="settings-field-hint" data-i18n="settings.ai.bedrockHint">認証はAWS SDKの標準credential chainに委譲します（キー入力なし）。モデル欄には基盤モデルID、cross-region推論プロファイルID（Global / us. / eu. / apac. / jp.（東京・大阪、日本内処理） / au.）、またはARNを直接入力できます。対応モデルはAWSの提供状況に依存します。</p>
+              <div class="form-group">
+                <label class="form-label" for="s-ai-profile-select" data-i18n="settings.ai.profile">推論プロファイル（geo）</label>
+                <select id="s-ai-profile-select" class="form-input">
+                  <option value="">All</option>
+                  <option value="global.">Global (global.)</option>
+                  <option value="us.">US (us.)</option>
+                  <option value="eu.">EU (eu.)</option>
+                  <option value="apac.">APAC (apac.)</option>
+                  <option value="jp.">Japan (jp.)</option>
+                  <option value="au.">Australia (au.)</option>
+                  <option value="ondemand">Single-Region (on-demand)</option>
+                </select>
+                <p class="settings-field-hint" data-i18n="settings.ai.profileHint">geo を選ぶと、その推論プロファイルのモデルだけを下のモデル欄に表示します。cross-region プロファイル（jp. 等）は on-demand で呼べます。Single-Region は素の基盤モデルで、リージョンによっては呼び出せないことがあります。</p>
+              </div>
+              <label class="settings-check-label ai-guardrail-toggle"><input id="s-ai-guardrail-enabled" type="checkbox"> <span data-i18n="settings.ai.guardrailEnable">Bedrock Guardrails を使う（任意）</span></label>
+              <div id="ai-guardrail-fields" class="is-hidden">
+                <div class="form-group">
+                  <label class="form-label" for="s-ai-guardrail-id" data-i18n="settings.ai.guardrailId">Guardrail ID / ARN</label>
+                  <input id="s-ai-guardrail-id" class="form-input" type="text" maxlength="2048" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="form-group">
+                  <label class="form-label" for="s-ai-guardrail-version" data-i18n="settings.ai.guardrailVersion">Guardrail バージョン</label>
+                  <input id="s-ai-guardrail-version" class="form-input" type="text" maxlength="64" placeholder="DRAFT" autocomplete="off" spellcheck="false">
+                </div>
+                <p class="settings-field-hint ai-guardrail-warning" data-i18n="settings.ai.guardrailResidency">⚠ Guardrails は日本内処理を保証しません。日本限定（jp.）の guardrail profile は存在せず、cross-region guardrail は APAC 全域（日本外を含む）へルーティングされ得ます。日本内データレジデンシーが必須の場合は Guardrails をオフにするか、呼び出しリージョン内の single-region guardrail を使ってください。分類フラグ付きの入出力は最大30日保持され得ます。</p>
+              </div>
             </div>
             <div id="ai-key-group" class="form-group is-hidden">
               <label class="form-label" for="s-ai-key" data-i18n="settings.ai.apiKey">APIキー</label>
@@ -493,9 +534,10 @@
             </div>
             <div class="form-group">
               <label class="form-label" for="s-ai-model" data-i18n="settings.ai.model">モデル</label>
+              <select id="s-ai-model-select" class="form-input is-hidden" data-i18n-title="settings.ai.modelSelect" title="取得したモデルから選択"></select>
               <input id="s-ai-model" class="form-input" type="text" list="ai-model-options" maxlength="200" autocomplete="off" spellcheck="false">
               <datalist id="ai-model-options"></datalist>
-              <p class="settings-field-hint" data-i18n="settings.ai.modelHint">候補から選択するか、モデルIDを直接入力できます。</p>
+              <p class="settings-field-hint" data-i18n="settings.ai.modelHint">「接続確認」でモデル一覧を取得すると下のプルダウンから選べます。ARN や未取得モデルは直接入力できます。</p>
             </div>
           </div>
           <div class="ai-settings-actions">
@@ -735,6 +777,7 @@
         <div class="ai-eyebrow" data-i18n="ai.eyebrow">LIVE NETWORK POSTURE</div>
         <h2 data-i18n="ai.title">ネットワークの現在地</h2>
         <p data-i18n="ai.subtitle">選択期間と直前の同一期間を比較します。分析はボタンを押した時だけ実行します。</p>
+        <div id="ai-period" class="ai-period"></div>
       </div>
       <button id="ai-refresh-btn" class="ai-refresh" type="button" data-i18n="ai.refresh">更新</button>
     </div>

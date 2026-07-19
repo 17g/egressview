@@ -1,4 +1,4 @@
-import { t, tVars } from './i18n.js?v=__ASSET_VERSION__';
+import { t, tVars, currentLang } from './i18n.js?v=__ASSET_VERSION__';
 import { _BASE } from './utils.js?v=__ASSET_VERSION__';
 import { getTimeRange } from './connections-panel.js?v=__ASSET_VERSION__';
 import { apiFetch } from './auth-socket.js?v=__ASSET_VERSION__';
@@ -7,11 +7,40 @@ import { setLogThreatFilter } from './log.js?v=__ASSET_VERSION__';
 
 const REFRESH_MS = 15_000;
 const METRICS = ['connections', 'devices', 'destinations', 'warn', 'danger'];
+// Providers that transmit data externally and require per-request consent.
+const CLOUD_CONSENT_PROVIDERS = ['anthropic', 'openai', 'bedrock'];
+const PROVIDER_LABELS = { ollama: 'Ollama', anthropic: 'Anthropic', openai: 'OpenAI', bedrock: 'Amazon Bedrock' };
+
+// crypto.randomUUID() only exists in secure contexts (HTTPS/localhost). EgressView
+// is often reached over plain HTTP on a LAN IP, so fall back to getRandomValues
+// (available everywhere) and finally Math.random, always emitting a valid v4 UUID.
+function randomUuid() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map(b => b.toString(16).padStart(2, '0'));
+  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+function formatStamp(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function formatRange(from, to) {
+  return `(${formatStamp(from)} - ${formatStamp(to)})`;
+}
 let refreshTimer = null;
 let generation = 0;
 let analysisController = null;
 let activeConversationId = null;
 let chatController = null;
+// Text of the most recent "analyze current period" result, so the chat can
+// reason about the same threats. Reset when a new analysis is run.
+let lastAnalysis = null;
 
 function formatNumber(value) {
   return new Intl.NumberFormat().format(Number(value) || 0);
@@ -70,6 +99,8 @@ async function refreshAiInsights() {
   const range = getTimeRange();
   const from = range.from ?? now - 3600_000;
   const to = range.to ?? now;
+  const period = document.getElementById('ai-period');
+  if (period) period.textContent = formatRange(from, to);
   const error = document.getElementById('ai-error');
   error.classList.remove('is-visible');
   try {
@@ -102,6 +133,20 @@ function renderChatMessages(messages) {
     item.textContent = message.status === 'failed' ? t('ai.chat.failed') : (message.body || '');
     return item;
   }));
+  container.scrollTop = container.scrollHeight;
+}
+
+// Optimistically append the submitted question plus a "thinking" placeholder so
+// the user sees their input immediately and knows inference is in progress.
+function renderPendingExchange(userText) {
+  const container = document.getElementById('ai-chat-messages');
+  const user = document.createElement('div');
+  user.className = 'ai-chat-message is-user';
+  user.textContent = userText;
+  const pending = document.createElement('div');
+  pending.className = 'ai-chat-message is-assistant is-pending';
+  pending.textContent = t('ai.chat.thinking');
+  container.append(user, pending);
   container.scrollTop = container.scrollHeight;
 }
 
@@ -152,35 +197,41 @@ async function sendChatMessage() {
   chatController = new AbortController();
   const button = document.getElementById('ai-chat-send-btn');
   button.disabled = true;
+  // Reflect the submitted question right away and show a "thinking" bubble; no
+  // per-message confirmation popup (settings-level consent is the gate).
+  input.value = '';
+  renderPendingExchange(message);
+  const error = document.getElementById('ai-error');
+  error.classList.remove('is-visible');
   try {
-    const configResponse = await apiFetch(`${_BASE}/api/config/ai`, { signal: chatController.signal });
-    const config = await configResponse.json().catch(() => ({}));
-    if (!configResponse.ok) throw new Error(config.error || t('ai.chat.failed'));
-    const cloud = config.provider === 'anthropic' || config.provider === 'openai';
-    if (cloud && !globalThis.confirm(tVars('ai.analysis.cloudConfirm', { provider: config.provider }))) return;
     const response = await apiFetch(`${_BASE}/api/ai/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         conversationId: activeConversationId || undefined,
-        requestId: globalThis.crypto.randomUUID(),
+        requestId: randomUuid(),
         message,
         from,
         to,
-        cloudConsentConfirmed: cloud,
+        cloudConsentConfirmed: true,
+        language: currentLang,
+        // Include the latest analysis for the same range so the AI can build on it.
+        priorAnalysis: lastAnalysis && lastAnalysis.from === from && lastAnalysis.to === to
+          ? lastAnalysis.text
+          : undefined,
       }),
       signal: chatController.signal,
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || t('ai.chat.failed'));
     activeConversationId = body.conversationId;
-    input.value = '';
     await loadConversations();
-  } catch (error) {
-    const display = document.getElementById('ai-error');
-    display.textContent = error.message || t('ai.chat.failed');
-    display.classList.add('is-visible');
+  } catch (cause) {
+    error.textContent = cause.message || t('ai.chat.failed');
+    error.classList.add('is-visible');
+    // Drop the optimistic bubbles: restore the real conversation, or clear.
     if (activeConversationId) await loadConversation(activeConversationId).catch(() => {});
+    else renderChatMessages([]);
   } finally {
     chatController = null;
     button.disabled = false;
@@ -205,20 +256,21 @@ async function analyzeCurrentRange() {
     const configResponse = await apiFetch(`${_BASE}/api/config/ai`, { signal: analysisController.signal });
     const config = await configResponse.json().catch(() => ({}));
     if (!configResponse.ok) throw new Error(config.error || t('ai.analysis.failed'));
-    const cloud = config.provider === 'anthropic' || config.provider === 'openai';
-    if (cloud && !globalThis.confirm(tVars('ai.analysis.cloudConfirm', { provider: config.provider }))) {
+    const cloud = CLOUD_CONSENT_PROVIDERS.includes(config.provider);
+    if (cloud && !globalThis.confirm(tVars('ai.analysis.cloudConfirm', { provider: PROVIDER_LABELS[config.provider] || config.provider }))) {
       result.textContent = t('ai.analysis.cancelled');
       return;
     }
     const response = await apiFetch(`${_BASE}/api/ai/analyze`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to, cloudConsentConfirmed: cloud }),
+      body: JSON.stringify({ from, to, cloudConsentConfirmed: cloud, language: currentLang }),
       signal: analysisController.signal,
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || t('ai.analysis.failed'));
     result.textContent = body.text;
+    lastAnalysis = { text: body.text, from, to };
     meta.textContent = tVars('ai.analysis.meta', {
       provider: body.provider,
       model: body.model,
@@ -237,8 +289,22 @@ async function analyzeCurrentRange() {
   }
 }
 
+async function updateProviderLabel() {
+  const el = document.getElementById('ai-analysis-privacy');
+  if (!el) return;
+  try {
+    const response = await apiFetch(`${_BASE}/api/config/ai`);
+    const config = await response.json().catch(() => ({}));
+    if (!response.ok) return;
+    const label = PROVIDER_LABELS[config.provider];
+    // Only rename to a specific provider; leave the generic default when disabled.
+    if (label) el.textContent = tVars('ai.analysis.privacyProvider', { provider: label });
+  } catch { /* keep the generic default text */ }
+}
+
 function startAiInsights() {
   refreshAiInsights();
+  updateProviderLabel();
   loadConversations().catch(() => {});
   if (!refreshTimer) refreshTimer = setInterval(refreshAiInsights, REFRESH_MS);
 }
