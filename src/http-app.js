@@ -19,6 +19,7 @@ const routerRoutes = require('./routes/routers');
 const manualThreatRoutes = require('./routes/manual-threat');
 const aiRoutes = require('./routes/ai');
 const { createSlowRequestLogger } = require('./slow-request-log');
+const { createRequestContextMiddleware } = require('./request-context');
 const i18nCatalog = require('./data/i18n.json');
 
 function serializeI18nModule(catalog) {
@@ -54,6 +55,18 @@ function buildCspHeader(cspNonce, tlsEnabled) {
   return { value: parts.join('; ') + ';', hsts: tlsEnabled ? 'max-age=31536000; includeSubDomains' : null };
 }
 
+function registerHealthRoutes(app, healthState) {
+  app.get('/healthz', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(healthState.liveness());
+  });
+  app.get('/readyz', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const ready = healthState.isReady();
+    res.status(ready ? 200 : 503).json(healthState.readiness());
+  });
+}
+
 function configureHttpApp(app, {
   subpath,
   assetVersion,
@@ -68,7 +81,9 @@ function configureHttpApp(app, {
   saveConfig,
   beaconScanRunner,
   logger,
+  healthState,
 }) {
+  app.use(createRequestContextMiddleware({ logger }));
   app.use(createSlowRequestLogger());
 
   app.use((req, res, next) => {
@@ -81,6 +96,8 @@ function configureHttpApp(app, {
     res.setHeader('Content-Security-Policy', csp.value);
     next();
   });
+
+  registerHealthRoutes(app, healthState);
 
   app.use(compression());
 
@@ -179,5 +196,6 @@ module.exports = {
   configureHttpApp,
   createIndexHtmlBase,
   injectIndexBootstrap,
+  registerHealthRoutes,
   serializeI18nModule,
 };

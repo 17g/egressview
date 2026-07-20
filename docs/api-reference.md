@@ -34,11 +34,13 @@ curl --fail-with-body \
 {"success":true,"token":"session-token","expiresAt":1784304000000}
 ```
 
-`POST /api/admin/verify` is also public and verifies a token supplied in the request body. All other endpoints are protected.
+`POST /api/admin/verify` is also public and verifies a token supplied in the request body. The detail-free `/healthz` and `/readyz` checks are public; all other endpoints are protected.
 
 ## Common behavior
 
 - Timestamps are Unix epoch milliseconds. Empty `from` and `to` values mean an open time range unless an endpoint says otherwise.
+- Every response includes `X-Request-Id`. A caller ID matching `[A-Za-z0-9][A-Za-z0-9._:-]{0,63}` is preserved; a missing or unsafe value is replaced with a generated UUID. The same safe ID correlates request, asynchronous, slow-request, and error logs. Query strings are not included in HTTP completion logs.
+- Every endpoint-bearing route module validates request bodies, query strings, and path parameters at a strict Zod boundary. Unknown fields, arrays or objects supplied for scalar parameters, and values over the documented limits return `400` before application state is changed.
 - Successful JSON responses use `application/json`; errors normally use `{ "error": "message" }`.
 - Common status codes are `400` for invalid input, `401` for invalid authentication, `404` for a missing resource, `413` for an oversized upload, `500` for an internal or persistence failure, `502` for router detection failure, and `503` while authentication is not initialized.
 - Router passwords, enable passwords, host fingerprints, and admin tokens are never returned by router-list APIs.
@@ -112,22 +114,34 @@ Create/detect bodies use `kind` (`yamaha` or `cisco`), `displayName`, `ip`, `use
 
 ## Backup and restore
 
-- `GET /api/backup/list` lists generations and retention settings.
+- `GET /api/backup/list` lists normal generations, retention settings, normal/pre-migration inventory, disk headroom, and next-migration readiness. Inventory entries are lightweight and report `integrity: "unchecked"` until a verified cleanup preview runs.
 - `POST /api/backup/create` creates and verifies a consistent SQLite snapshot.
 - `GET /api/backup/download/:name` downloads a named generation.
 - `POST /api/backup/restore` uses `{ "name": "..." }`.
 - `POST /api/backup/upload` accepts a raw SQLite file body up to 100 MB, not multipart form data.
-- `POST /api/backup/config` accepts positive `intervalHours` and `maxGenerations` values.
+- `POST /api/backup/config` accepts positive `intervalHours`, `maxGenerations` (minimum 2), non-negative `maxBackupBytes` (`0` disables the storage cap), and boolean `autoPrune`. Auto-prune defaults to off.
+- `POST /api/backup/prune` accepts `{ "execute": false }` for a verified dry-run or `{ "execute": true }` for confirmed cleanup and returns `202` with a worker job. Integrity checks run outside the main event loop, so collection and HTTP remain responsive. Only one cleanup job may run; another request receives `409`.
+- `GET /api/backup/prune/:jobId` returns job status (`running`, `cancelling`, `timing_out`, `completed`, `cancelled`, `timed_out`, or `failed`), progress, and the completed plan/result. `DELETE /api/backup/prune/:jobId` requests safe cancellation. Cleanup always keeps two normal generations and the latest verified migration generation; corrupt, unverified, changed, and temporary files are never deleted.
+
+## Process health
+
+- `GET /healthz` is an unauthenticated, cache-disabled liveness check and returns only `{ "status": "ok" }` when the Node.js event loop can respond.
+- `GET /readyz` is an unauthenticated, cache-disabled readiness check. It returns `503` with `{ "status": "not_ready" }` until configuration and DB bootstrap complete, then `200` with `{ "status": "ready" }`. It exposes no router, database, or credential details.
 
 ## AI provider configuration
 
 AI insights always shows locally calculated facts. Only after an explicit user action, it sends aggregates — including destination IPs, hostnames, device names, and MAC addresses — to the configured AI provider. Credentials such as passwords are never sent.
 
-- `GET /api/config/ai` returns the selected provider, model IDs, Ollama endpoint, AWS `region`, and key-set/consent flags. API key values are never returned.
+- `GET /api/config/ai` returns the selected provider, model IDs, Ollama endpoint, AWS `region`, key-set/consent flags, and `selectedModelPricing`. API key values are never returned.
 - `POST /api/config/ai` accepts `provider` (`disabled`, `ollama`, `anthropic`, `openai`, or `bedrock`), provider-keyed `models`, `ollamaEndpoint`, a Bedrock `region`, optional cloud `keys`, and `clearKeys`. Any externally transmitting provider (`anthropic`, `openai`, `bedrock`) requires provider-specific `cloudConsent: true`. Bedrock stores no key and delegates authentication to the AWS SDK default credential chain; `models.bedrock` accepts a foundation model ID, a cross-region inference profile ID (`global`/`us`/`eu`/`apac`/`jp`/`au`), or an ARN (up to 400 chars). An optional `guardrail` (`{ enabled, id, version }`) attaches a Bedrock Guardrail, passed to Converse via `guardrailConfig` when enabled (requires `bedrock:ApplyGuardrail`); note that Guardrails do not guarantee in-Japan processing (see `docs/setup-bedrock.md`).
+- `POST /api/ai/models` accepts a Bedrock `region` and retrieves at most 200 text-generation model/inference-profile IDs without running inference. The response adds `modelPricing` coverage while retaining the string `models` array. Specialized image, audio, embedding, and similar IDs are omitted from the picker, but manual model entry remains available as a fallback.
+- `POST /api/ai/pricing/check` accepts a provider and model ID and reports whether the versioned catalog has a matching standard token rate. It does not contact the provider or invoke a model.
+- `POST /api/ai/guardrails` accepts a Bedrock `region` and lists that region's Guardrails (id, name, and versions) without running inference. Fail-open: a missing `bedrock:ListGuardrails` permission returns an empty list so the settings UI falls back to manual guardrail entry.
 - `POST /api/ai/test` accepts an empty JSON object. Fetch-based providers retrieve at most 200 model IDs (10-second timeout, 1 MB limit). Bedrock runs fail-open model discovery and additionally sends a short fixed string via Converse to verify `bedrock:InvokeModel` permission (no network, device, or threat data is sent).
 - `GET /api/ai/facts` requires `from` and accepts `to` as epoch milliseconds. It returns current and immediately preceding equal-period counts for connections, devices, destinations, and threat levels, plus credential-free router collection status. The range is capped at 14 days and no data is sent to an AI provider.
-- `POST /api/ai/analyze` accepts `from` and optional `to`, then sends aggregates without internal IPs, MAC addresses, device names, router management details, or raw logs to the selected provider. Externally transmitting providers (Anthropic/OpenAI/Bedrock) require both saved consent and `cloudConsentConfirmed: true` on each request. The range is capped at 14 days, timeout is 30 seconds, and only one analysis may run server-wide.
+- `POST /api/ai/analyze` accepts `from` and optional `to`, then sends connection aggregates plus a bounded device inventory (up to 30 activity-prioritized devices) and ASUS network-node summaries (up to 10 nodes and 5 sample devices per node). Fields can include destination/source IPs, hostnames, device names, MACs, vendors, IPv6, first/last seen, source, status, and counts. Credentials, device notes, archived devices, router/node management IPs, and raw logs are excluded. Externally transmitting providers (Anthropic/OpenAI/Bedrock) require both saved consent and `cloudConsentConfirmed: true` on each request. The range is capped at 14 days, timeout is 30 seconds, and only one analysis may run server-wide.
+- `GET /api/ai/usage/monthly` accepts the browser `timezoneOffset` in minutes and returns current/previous local-calendar-month request and token totals. Its `pricing` object includes the catalog version, effective date, and source URLs. `pricedTokens`, `unpricedTokens`, and grouped `unpricedModels` make clear when estimated USD is only a partial total. Successful Ollama, Anthropic, OpenAI, and Bedrock calls are appended to v7 SQLite with the provider/model and the price-table version and rates used at invocation time, so later catalog updates do not recalculate prior months. `unknownPriceRequests` and provider responses without usage (`usageMissingRequests`) remain distinct and are never mislabeled as USD 0; add-on charges such as Bedrock Guardrails are excluded. Conversation retrieval joins `usageInputTokens`, `usageOutputTokens`, `usageTotalTokens`, `estimatedCostUsd`, and `pricingVersion` from the same request onto assistant messages; history created before usage recording keeps provider/model with null usage instead of inferred values. The UI uses `$` in English and explicit `USD` notation in Japanese without currency conversion.
+- `GET /api/ai/pricing/diagnostics` accepts `timezoneOffset` and returns the selected model's catalog status plus grouped unpriced models for the current and previous local month. It exposes model IDs and usage totals, never API keys or prompt/network contents.
 - `POST /api/ai/chat` accepts a `message` of at most 4,000 characters, a range, and optional `conversationId` and `requestId`. It appends the user row to v6 SQLite before calling AI, then appends an assistant row on success or a body-free failure row. The same `requestId + role` is never duplicated.
 - `GET /api/ai/conversations` returns at most 100 conversations plus stored counts and body bytes. `GET /api/ai/conversations/:id` returns at most 500 messages in append order, while `DELETE /api/ai/conversations/:id` is the only explicit conversation deletion path. Restart and configuration changes never update or truncate existing rows.
 
@@ -137,7 +151,7 @@ Restore is fail-closed: EgressView validates the source, confirms a safety backu
 
 ## Endpoint catalog
 
-All 60 implemented REST endpoints are listed below. **Public** means no token is required; every other row requires `X-Admin-Token`.
+All 75 implemented HTTP endpoints are listed below. **Public** means no token is required; every other row requires `X-Admin-Token`.
 
 | Area | Method and path | Access |
 |---|---|---|
@@ -180,6 +194,11 @@ All 60 implemented REST endpoints are listed below. **Public** means no token is
 | Backup | `POST /api/backup/restore` | Protected |
 | Backup | `POST /api/backup/upload` | Protected |
 | Backup | `POST /api/backup/config` | Protected |
+| Backup | `POST /api/backup/prune` | Protected |
+| Backup | `GET /api/backup/prune/:jobId` | Protected |
+| Backup | `DELETE /api/backup/prune/:jobId` | Protected |
+| Process health | `GET /healthz` | Public; minimal liveness only |
+| Process health | `GET /readyz` | Public; minimal readiness only |
 | General configuration | `GET /api/status` | Protected |
 | General configuration | `POST /api/config/general` | Protected |
 | Data sources | `GET /api/config/datasources` | Protected |
@@ -191,8 +210,13 @@ All 60 implemented REST endpoints are listed below. **Public** means no token is
 | Manual threat investigation | `POST /api/threat/manual-lookup` | Protected; explicitly sends one public IP to selected providers |
 | AI configuration | `GET /api/config/ai` | Protected; returns key-set flags, never key values |
 | AI configuration | `POST /api/config/ai` | Protected; saves provider, models, endpoint, and cloud keys |
+| AI configuration | `POST /api/ai/models` | Protected; discovers Bedrock model/profile IDs without inference |
+| AI configuration | `POST /api/ai/pricing/check` | Protected; checks embedded pricing coverage without provider access |
+| AI configuration | `POST /api/ai/guardrails` | Protected; discovers Bedrock guardrails without inference (fail-open) |
 | AI configuration | `POST /api/ai/test` | Protected; retrieves model IDs without sending network data |
 | AI insights | `GET /api/ai/facts` | Protected; local facts and prior-period comparison only |
+| AI insights | `GET /api/ai/usage/monthly` | Protected; current and previous local-month token usage and approximate USD cost |
+| AI insights | `GET /api/ai/pricing/diagnostics` | Protected; selected-model status and grouped unpriced usage |
 | AI insights | `POST /api/ai/analyze` | Protected; manually analyzes aggregates (incl. destination IPs, hostnames, device names, MAC); cloud requires double consent |
 | AI chat | `POST /api/ai/chat` | Protected; appends the question first and stores an answer or failure row |
 | AI chat | `GET /api/ai/conversations` | Protected; conversation list and storage usage |

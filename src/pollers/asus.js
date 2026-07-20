@@ -14,9 +14,11 @@ let asusLoginV1 = false;
 let lastAsusUser = '';
 let lastAsusPass = '';
 let pollTimer = null;
+let pollInFlight = null;
 let prevNetdev = {};
 let prevPollTime = Date.now();
 let latestAsusClients = [];
+let latestMeshNodes = [];
 let asusRenewFailures = 0;
 const ASUS_RENEW_MAX_FAILURES = 3;
 // Transient errors (EPIPE, ECONNRESET, etc.) are common on home routers.
@@ -25,6 +27,7 @@ let consecutivePollErrors = 0;
 const POLL_ERROR_THRESHOLD = 3;
 const ASUS_API_TIMEOUT_MS = 12000;
 const ASUS_API_RETRY_DELAY_MS = 350;
+const ASUS_AUTH_REQUEST_TIMEOUT_MS = 8_000;
 
 // Callbacks
 let onAuthRequired = () => {};
@@ -54,7 +57,7 @@ async function loginToRouter(ip, username, password, loginV1 = false) {
   const id = crypto.randomBytes(5).toString('hex');
   const nonceRes = await axios.post(`${base}/get_Nonce.cgi`, JSON.stringify({ id }), {
     headers: { 'Content-Type': 'application/json' },
-    timeout: 8000,
+    timeout: ASUS_AUTH_REQUEST_TIMEOUT_MS,
   });
   const nonce = nonceRes.data?.nonce;
   if (!nonce) throw new Error(t('asus.nonce-failed'));
@@ -79,7 +82,7 @@ async function loginToRouter(ip, username, password, loginV1 = false) {
 
   const res = await axios.post(`${base}/login_v2.cgi`, params.toString(), {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    timeout: 8000,
+    timeout: ASUS_AUTH_REQUEST_TIMEOUT_MS,
     maxRedirects: 0,
     validateStatus: () => true,
   });
@@ -260,7 +263,7 @@ async function ensureAsusAuth() {
   }
 }
 
-async function poll() {
+async function runPoll() {
   if (!await ensureAsusAuth()) return;
   try {
     const now = Date.now();
@@ -280,6 +283,7 @@ async function poll() {
     }
     const netdev = netdevRaw ? parseNetdev(netdevRaw) : {};
     const meshNodes = meshRaw ? parseMeshNodes(meshRaw) : [];
+    latestMeshNodes = meshNodes;
     prevPollTime = now;
 
     onNetworkUpdate({
@@ -309,10 +313,19 @@ async function poll() {
   }
 }
 
+function poll() {
+  // setInterval does not wait for the previous callback. Keep one ASUS request
+  // batch in flight so a slow router cannot trigger overlapping token renewals
+  // or duplicate appGet.cgi requests.
+  if (pollInFlight) return pollInFlight;
+  pollInFlight = runPoll().finally(() => { pollInFlight = null; });
+  return pollInFlight;
+}
+
 function startPolling(intervalMs) {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(poll, intervalMs);
-  poll();
+  return poll();
 }
 
 function stopPolling() {
@@ -341,6 +354,7 @@ function disable() {
 }
 
 function getClients() { return latestAsusClients; }
+function getMeshNodes() { return latestMeshNodes; }
 function getClientMac(ip) {
   const c = latestAsusClients.find(cl => cl.ip === ip);
   return c?.mac || null;
@@ -366,6 +380,7 @@ module.exports = {
   parseMeshNodes,
   apiGet,
   getClients,
+  getMeshNodes,
   getClientMac,
   isEnabled,
   isAuthenticated,

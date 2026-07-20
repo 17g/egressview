@@ -147,16 +147,20 @@ describe('config routes', () => {
 
 describe('backup configuration route', () => {
   it('coerces positive integer strings through the shared schema', async () => {
-    let config = { intervalHours: 24, maxGenerations: 7 };
+    let config = { intervalHours: 24, maxGenerations: 7, maxBackupBytes: 0, autoPrune: false };
     const backup = {
       getConfig: () => ({ ...config }),
       configure: updates => { config = { ...config, ...updates }; },
       stopPeriodicBackup() {}, startPeriodicBackup() {},
     };
     const app = mount(backupRoutes({ requireAdmin, backup, saveConfig() {}, appRoot: process.cwd() }));
-    const result = await request(app, 'POST', '/api/backup/config', { intervalHours: '12', maxGenerations: '3' });
+    const result = await request(app, 'POST', '/api/backup/config', {
+      intervalHours: '12', maxGenerations: '3', maxBackupBytes: '4294967296', autoPrune: true,
+    });
     assert.equal(result.status, 200);
-    assert.deepEqual(config, { intervalHours: 12, maxGenerations: 3 });
+    assert.deepEqual(config, {
+      intervalHours: 12, maxGenerations: 3, maxBackupBytes: 4294967296, autoPrune: true,
+    });
   });
   it('rolls back backup scheduling when persistence fails', async () => {
     let config = { intervalHours: 24, maxGenerations: 7 };
@@ -197,6 +201,86 @@ describe('backup configuration route', () => {
     });
     assert.equal(status, 400);
     assert.deepEqual(config, { intervalHours: 24, maxGenerations: 7 });
+  });
+
+  it('previews and executes safe backup cleanup through separate requests', async () => {
+    const calls = [];
+    const plan = { candidates: [{ name: 'old.db', size: 100 }], candidateBytes: 100 };
+    const previewId = '11111111-1111-4111-8111-111111111111';
+    const executeId = '22222222-2222-4222-8222-222222222222';
+    const jobs = new Map();
+    const backup = {
+      startPruneJob: ({ execute }) => {
+        calls.push(execute ? 'execute' : 'preview');
+        const id = execute ? executeId : previewId;
+        const job = { id, operation: execute ? 'execute' : 'preview', status: 'running' };
+        jobs.set(id, execute
+          ? { ...job, status: 'completed', result: { deleted: plan.candidates, deletedBytes: 100 } }
+          : { ...job, status: 'completed', result: plan });
+        return job;
+      },
+      getPruneJob: id => jobs.get(id),
+    };
+    const app = mount(backupRoutes({ requireAdmin, backup, appRoot: process.cwd() }));
+
+    const preview = await request(app, 'POST', '/api/backup/prune', { execute: false });
+    const execute = await request(app, 'POST', '/api/backup/prune', { execute: true });
+    const previewResult = await request(app, 'GET', `/api/backup/prune/${previewId}`);
+    const executeResult = await request(app, 'GET', `/api/backup/prune/${executeId}`);
+
+    assert.equal(preview.status, 202);
+    assert.equal(execute.status, 202);
+    assert.deepEqual(previewResult.body.job.result, plan);
+    assert.equal(executeResult.body.job.result.deletedBytes, 100);
+    assert.deepEqual(calls, ['preview', 'execute']);
+  });
+
+  it('rejects malformed prune confirmation without touching backups', async () => {
+    let called = false;
+    const backup = {
+      startPruneJob: () => { called = true; },
+    };
+    const app = mount(backupRoutes({ requireAdmin, backup, appRoot: process.cwd() }));
+    const result = await request(app, 'POST', '/api/backup/prune', { execute: 'yes' });
+    assert.equal(result.status, 400);
+    assert.equal(called, false);
+  });
+
+  it('rejects concurrent cleanup and returns the active job', async () => {
+    const active = {
+      id: '11111111-1111-4111-8111-111111111111',
+      operation: 'preview',
+      status: 'running',
+    };
+    const backup = {
+      startPruneJob() {
+        const error = new Error('busy');
+        error.code = 'BACKUP_PRUNE_BUSY';
+        error.job = active;
+        throw error;
+      },
+    };
+    const app = mount(backupRoutes({ requireAdmin, backup, appRoot: process.cwd() }));
+
+    const result = await request(app, 'POST', '/api/backup/prune', { execute: false });
+    assert.equal(result.status, 409);
+    assert.deepEqual(result.body.job, active);
+  });
+
+  it('cancels only a known running cleanup job', async () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    let job = { id, operation: 'preview', status: 'running' };
+    const backup = {
+      getPruneJob: requested => requested === id ? job : null,
+      cancelPruneJob: () => { job = { ...job, status: 'cancelling' }; return true; },
+    };
+    const app = mount(backupRoutes({ requireAdmin, backup, appRoot: process.cwd() }));
+
+    const cancelled = await request(app, 'DELETE', `/api/backup/prune/${id}`);
+    assert.equal(cancelled.status, 200);
+    assert.equal(cancelled.body.job.status, 'cancelling');
+    assert.equal((await request(app, 'DELETE', `/api/backup/prune/${id}`)).status, 409);
+    assert.equal((await request(app, 'GET', '/api/backup/prune/not-a-uuid')).status, 400);
   });
 
   it('closes every DB connection before restore and reopens them afterward', async () => {
@@ -294,6 +378,33 @@ describe('beacon configuration route', () => {
     assert.strictEqual(appState.beaconConfig, original);
     assert.equal(rescanned, false);
   });
+
+  it('rejects unknown, mistyped, oversized, and invalid query fields before mutation', async () => {
+    const original = {
+      enabled: false, minObs: 4, maxCov: 0.15,
+      minIntervalMs: 60_000, maxIntervalMs: 14_400_000,
+      scanIntervalMs: 900_000, whitelistDomains: [], orgAllowlist: [],
+    };
+    const appState = { beaconConfig: original };
+    let saves = 0;
+    const app = mount(beaconRoutes({
+      requireAdmin,
+      beacons: { getBeacons: () => [], dismissBeacon: () => true },
+      appState,
+      saveConfig: () => { saves++; },
+    }));
+
+    assert.equal((await request(app, 'POST', '/api/beacons/config', { enabled: true, typo: 1 })).status, 400);
+    assert.equal((await request(app, 'POST', '/api/beacons/config', { minObs: {} })).status, 400);
+    assert.equal((await request(app, 'POST', '/api/beacons/config', {
+      whitelistDomains: Array.from({ length: 201 }, () => 'example.com'),
+    })).status, 400);
+    assert.equal((await request(app, 'GET', '/api/beacons?includeDismissed=yes')).status, 400);
+    assert.equal((await request(app, 'GET', '/api/beacons/config?extra=1')).status, 400);
+    assert.equal((await request(app, 'POST', '/api/beacons/not-a-number/dismiss', {})).status, 400);
+    assert.equal(saves, 0);
+    assert.strictEqual(appState.beaconConfig, original);
+  });
 });
 
 describe('router routes', () => {
@@ -339,6 +450,7 @@ describe('device routes', () => {
   it('covers inventory and archive lifecycle', async () => {
     const devices = {
       getAll: () => [{ deviceId: 'dev1', ip: '192.168.1.10', mac: '00:11:22:33:44:55' }],
+      getByDeviceId: id => id === 'dev1' ? { deviceId: id } : null,
       archiveDevice: id => id === 'dev1',
       unarchiveDevice: id => id === 'dev1',
     };
@@ -355,5 +467,102 @@ describe('device routes', () => {
     assert.equal((await request(app, 'POST', '/api/devices/archive', { deviceId: 'dev1' })).status, 200);
     assert.equal((await request(app, 'POST', '/api/devices/unarchive', { deviceId: 'dev1' })).status, 200);
     assert.equal((await request(app, 'POST', '/api/devices/archive', {})).status, 400);
+  });
+
+  it('rejects unknown, mistyped, and oversized device inputs before mutation', async () => {
+    let mutations = 0;
+    const devices = {
+      getAll: () => [],
+      getMergeCandidates: () => [],
+      getByDeviceId: () => null,
+      approveMerge: () => { mutations++; return true; },
+      rejectCandidate: () => { mutations++; },
+      archiveDevice: () => { mutations++; return true; },
+      unarchiveDevice: () => { mutations++; return true; },
+    };
+    const app = mount(devicesRoutes({
+      requireAdmin,
+      devices,
+      notes: null,
+      yamaha: { getNdpByMac: () => null },
+    }));
+
+    assert.equal((await request(app, 'GET', '/api/devices?unknown=1')).status, 400);
+    assert.equal((await request(app, 'GET', '/api/devices/merge-candidates?status=invalid')).status, 400);
+    assert.equal((await request(app, 'POST', '/api/devices/merge', { keepId: {}, dropId: 'dev2' })).status, 400);
+    assert.equal((await request(app, 'POST', '/api/devices/reject', { id: [] })).status, 400);
+    assert.equal((await request(app, 'POST', '/api/devices/archive', {
+      deviceId: 'x'.repeat(129),
+    })).status, 400);
+    assert.equal((await request(app, 'POST', '/api/devices/unarchive', {
+      deviceId: 'dev1', extra: true,
+    })).status, 400);
+    assert.equal(mutations, 0);
+  });
+
+  it('does not merge devices when note persistence fails', async () => {
+    const values = new Map([['drop', 'printer']]);
+    let merges = 0;
+    const devices = {
+      getByDeviceId: id => ({ deviceId: id }),
+      approveMerge: () => { merges++; return true; },
+    };
+    const notes = {
+      get: key => values.get(key),
+      set: (key, value) => values.set(key, value),
+      del: key => values.delete(key),
+      snapshot: () => new Map(values),
+      restore: snapshot => {
+        values.clear();
+        for (const [key, value] of snapshot) values.set(key, value);
+      },
+      save: () => { throw new Error('disk full'); },
+    };
+    const app = mount(devicesRoutes({
+      requireAdmin,
+      devices,
+      notes,
+      yamaha: { getNdpByMac: () => null },
+    }));
+
+    const result = await request(app, 'POST', '/api/devices/merge', { keepId: 'keep', dropId: 'drop' });
+
+    assert.equal(result.status, 500);
+    assert.equal(values.get('drop'), 'printer');
+    assert.equal(values.has('keep'), false);
+    assert.equal(merges, 0);
+  });
+
+  it('restores a migrated note when the device transaction fails', async () => {
+    const values = new Map([['drop', 'printer']]);
+    let saves = 0;
+    const devices = {
+      getByDeviceId: id => ({ deviceId: id }),
+      approveMerge: () => { throw new Error('database is busy'); },
+    };
+    const notes = {
+      get: key => values.get(key),
+      set: (key, value) => values.set(key, value),
+      del: key => values.delete(key),
+      snapshot: () => new Map(values),
+      restore: snapshot => {
+        values.clear();
+        for (const [key, value] of snapshot) values.set(key, value);
+      },
+      save: () => { saves++; },
+    };
+    const app = mount(devicesRoutes({
+      requireAdmin,
+      devices,
+      notes,
+      yamaha: { getNdpByMac: () => null },
+    }));
+
+    const result = await request(app, 'POST', '/api/devices/merge', { keepId: 'keep', dropId: 'drop' });
+
+    assert.equal(result.status, 500);
+    assert.equal(values.get('drop'), 'printer');
+    assert.equal(values.has('keep'), false);
+    assert.equal(saves, 2);
   });
 });

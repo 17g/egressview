@@ -14,6 +14,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'js', 
 class FakeElement {
   constructor() {
     this.textContent = '';
+    this.value = '';
     this.disabled = false;
     this.scrollTop = 0;
     this.scrollHeight = 100;
@@ -29,9 +30,10 @@ class FakeElement {
   set className(value) { this._classes = new Set(value.split(/\s+/).filter(Boolean)); }
   get className() { return [...this._classes].join(' '); }
   replaceChildren(...children) { this.children = children; }
+  append(...children) { this.children.push(...children); }
 }
 
-function harness() {
+function harness({ apiFetch = async () => { throw new Error('Unexpected request'); } } = {}) {
   const ids = new Map();
   const cards = new Map();
   const get = id => {
@@ -39,9 +41,12 @@ function harness() {
     return ids.get(id);
   };
   const context = {
-    Intl, URLSearchParams, Date,
+    Intl, URLSearchParams, Date, AbortController, Uint8Array, Math, currentLang: 'en', _BASE: '',
     t: key => key,
     tVars: (key, values) => `${key}:${JSON.stringify(values)}`,
+    apiFetch,
+    getTimeRange: () => ({ from: 1, to: 2 }),
+    crypto: { randomUUID: () => '11111111-1111-4111-8111-111111111111' },
     document: {
       getElementById: get,
       createElement: () => new FakeElement(),
@@ -59,6 +64,13 @@ function harness() {
 }
 
 describe('AI insights view', () => {
+  it('formats USD estimates as dollars in English and explicit USD in Japanese', () => {
+    const { context } = harness();
+    assert.equal(context.formatUsd(0.0012), '$0.0012');
+    context.currentLang = 'ja';
+    assert.match(context.formatUsd(0.0012), /^USD\s*0\.0012$/);
+  });
+
   it('calculates percentage deltas without dividing by zero', () => {
     const { context } = harness();
     assert.deepEqual({ ...context.deltaSummary(15, 10) }, { delta: 5, percent: 50 });
@@ -91,15 +103,106 @@ describe('AI insights view', () => {
     assert.equal(get('ai-cancel-btn').classList.contains('is-hidden'), true);
   });
 
+  it('renders monthly tokens, estimated cost, and an unpriced-model warning', () => {
+    const { context, get } = harness();
+    context.renderAiUsage({
+      pricing: { catalogVersion: '2026-05-27', effectiveFrom: '2026-05-27' },
+      current: { requests: 3, pricedRequests: 2, unknownPriceRequests: 1, usageMissingRequests: 0, inputTokens: 1200, outputTokens: 300, totalTokens: 1500, unpricedTokens: 450, estimatedCostUsd: 0.0084, unpricedModels: [{ provider: 'openai', model: 'future-model' }] },
+      previous: { requests: 1, pricedRequests: 1, unknownPriceRequests: 0, usageMissingRequests: 1, inputTokens: 100, outputTokens: 50, totalTokens: 150, estimatedCostUsd: 0.0004 },
+    });
+    assert.equal(get('ai-usage-current-tokens').textContent, 'ai.usage.tokens:{"tokens":"1,500"}');
+    assert.equal(get('ai-usage-current-detail').textContent, 'ai.usage.detail:{"input":"1,200","output":"300"}');
+    assert.equal(get('ai-usage-current-cost').textContent, 'ai.usage.costPartial:{"cost":"$0.0084"}');
+    assert.equal(get('ai-usage-current-unpriced').textContent,
+      'ai.usage.unpricedDetail:{"tokens":"450","requests":"1"}');
+    assert.equal(get('ai-usage-caveat').textContent,
+      'ai.usage.unpriced ai.usage.unpricedModels:{"models":"openai/future-model","remaining":""} ' +
+      'ai.usage.missing ai.usage.catalog:{"version":"2026-05-27","effective":"2026-05-27"}');
+  });
+
   it('renders persisted conversation messages as untrusted text', () => {
     const { context, get } = harness();
     context.renderChatMessages([
       { role: 'user', status: 'complete', body: '<img src=x onerror=alert(1)>' },
-      { role: 'assistant', status: 'failed', body: null },
+      {
+        role: 'assistant', status: 'complete', body: '<script>alert(1)</script>',
+        provider: 'anthropic', model: 'claude-sonnet-4-5', usageTotalTokens: 150,
+        estimatedCostUsd: 0.0012,
+      },
+      { role: 'assistant', status: 'failed', body: null, provider: 'openai', model: 'gpt-5.4' },
     ]);
     const children = get('ai-chat-messages').children;
-    assert.equal(children[0].textContent, '<img src=x onerror=alert(1)>');
-    assert.equal(children[1].textContent, 'ai.chat.failed');
-    assert.equal(children[1].classList.contains('is-failed'), true);
+    assert.equal(children[0].children[0].textContent, '<img src=x onerror=alert(1)>');
+    assert.equal(children[1].children[0].textContent, '<script>alert(1)</script>');
+    assert.equal(children[1].children[1].textContent,
+      'ai.chat.responseMeta:{"provider":"Anthropic","model":"claude-sonnet-4-5"} · ' +
+      'ai.chat.usagePriced:{"tokens":"150","cost":"$0.0012"}');
+    assert.equal(children[2].children[0].textContent, 'ai.chat.failed');
+    assert.equal(children[2].children[1].textContent,
+      'ai.chat.responseMeta:{"provider":"OpenAI","model":"gpt-5.4"} · ai.chat.usageUnavailable');
+    assert.equal(children[2].classList.contains('is-failed'), true);
+  });
+
+  it('shows zeroed usage sentinel rows as provider usage unavailable', () => {
+    const { context, get } = harness();
+    context.renderChatMessages([{
+      role: 'assistant', body: 'answer', provider: 'anthropic', model: 'claude-test',
+      usageInputTokens: 0, usageOutputTokens: 0, usageTotalTokens: 0, estimatedCostUsd: null,
+    }]);
+    assert.match(get('ai-chat-messages').children[0].children[1].textContent, /ai\.chat\.usageUnavailable/);
+  });
+
+  it('keeps a server-persisted question visible when provider inference fails', async () => {
+    const calls = [];
+    const apiFetch = async (url, options = {}) => {
+      calls.push({ url, options });
+      if (url.endsWith('/api/ai/chat')) {
+        return {
+          ok: false,
+          json: async () => ({ conversationId: 'conversation-1', error: 'Provider request failed (400)' }),
+        };
+      }
+      if (url.endsWith('/api/ai/conversations')) {
+        return {
+          ok: true,
+          json: async () => ({
+            conversations: [{ conversationId: 'conversation-1', createdAt: 1, messageCount: 2 }],
+            storage: { conversations: 1, messages: 2, bodyBytes: 12 },
+          }),
+        };
+      }
+      if (url.endsWith('/api/ai/conversations/conversation-1')) {
+        return {
+          ok: true,
+          json: async () => ({ messages: [
+            { role: 'user', status: 'complete', body: 'What changed?' },
+            { role: 'assistant', status: 'failed', body: null, provider: 'openai', model: 'gpt-test' },
+          ] }),
+        };
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+    const { context, get } = harness({ apiFetch });
+    get('ai-chat-input').value = 'What changed?';
+
+    await context.sendChatMessage();
+
+    assert.equal(get('ai-chat-input').value, '');
+    assert.equal(get('ai-conversation-select').value, 'conversation-1');
+    assert.equal(get('ai-chat-messages').children[0].children[0].textContent, 'What changed?');
+    assert.equal(get('ai-chat-messages').children[1].children[0].textContent, 'ai.chat.failed');
+    assert.equal(get('ai-error').textContent, 'Provider request failed (400)');
+    assert.equal(calls.length, 3);
+  });
+
+  it('restores the question when the request fails before server persistence', async () => {
+    const { context, get } = harness({ apiFetch: async () => { throw new Error('network unavailable'); } });
+    get('ai-chat-input').value = 'Can I retry this?';
+
+    await context.sendChatMessage();
+
+    assert.equal(get('ai-chat-input').value, 'Can I retry this?');
+    assert.equal(get('ai-chat-messages').children.length, 0);
+    assert.equal(get('ai-error').textContent, 'network unavailable');
   });
 });

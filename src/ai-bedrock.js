@@ -10,9 +10,8 @@
 // model id, a geographic cross-region inference profile us./eu./apac./jp./au.,
 // a Global profile, or an ARN).
 
-// The AWS SDK is an OPTIONAL peer dependency (opt-in): it is not installed by
-// default. Surface a clear, actionable message when it is missing instead of a
-// raw MODULE_NOT_FOUND (or a generic mapped error).
+// The AWS SDK ships as a standard dependency. Keep a clear fallback error for
+// incomplete production installs instead of surfacing a raw MODULE_NOT_FOUND.
 const BEDROCK_NOT_INSTALLED =
   'Amazon Bedrock support is not installed. Run: '
   + 'npm install @aws-sdk/client-bedrock-runtime @aws-sdk/client-bedrock';
@@ -69,7 +68,7 @@ function createBedrockTransport({ runtime = null, control = null, requireModule 
     return runtimeClients.get(region);
   }
 
-  async function converse({ region, modelId, prompt, maxTokens = 2048, maxBytes = 1024 * 1024, guardrail = null, signal }) {
+  async function converse({ region, modelId, prompt, maxTokens = 2048, maxBytes = 1024 * 1024, guardrail = null, signal, onUsage }) {
     if (!region) throw new Error('AWS region is not configured');
     if (!modelId) throw new Error('Bedrock model is not configured');
     const { ConverseCommand } = getRuntime();
@@ -108,6 +107,13 @@ function createBedrockTransport({ runtime = null, control = null, requireModule 
     }
     const text = extractText(output);
     if (maxBytes && Buffer.byteLength(text) > maxBytes) throw new Error('Bedrock response was too large');
+    if (typeof onUsage === 'function') {
+      onUsage({
+        inputTokens: output?.usage?.inputTokens,
+        outputTokens: output?.usage?.outputTokens,
+        totalTokens: output?.usage?.totalTokens,
+      });
+    }
     return text;
   }
 
@@ -136,7 +142,51 @@ function createBedrockTransport({ runtime = null, control = null, requireModule 
     }
   }
 
-  return { converse, listModels };
+  // Best-effort Guardrail discovery for the settings UI. Returns one entry per
+  // guardrail with the versions seen (always incl. DRAFT). Any failure (incl.
+  // missing bedrock:ListGuardrails permission) returns [] so the UI falls back
+  // to manual id/version entry (fail-open by design).
+  async function listGuardrails({ region, timeoutMs = 10_000 }) {
+    if (!region) return [];
+    const abortSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined;
+    try {
+      const { BedrockClient, ListGuardrailsCommand } = getControl();
+      const client = new BedrockClient({ region });
+      const byId = new Map();
+      let nextToken;
+      // Ten pages is a defensive upper bound for best-effort UI discovery. It
+      // also protects against a broken service repeatedly returning new tokens.
+      for (let page = 0; page < 10; page++) {
+        const out = await client.send(new ListGuardrailsCommand({
+          maxResults: 100,
+          ...(nextToken ? { nextToken } : {}),
+        }), { abortSignal });
+        for (const guardrail of out?.guardrails || []) {
+          if (!guardrail?.id) continue;
+          const entry = byId.get(guardrail.id) || {
+            id: guardrail.id,
+            arn: guardrail.arn || null,
+            name: guardrail.name || guardrail.id,
+            versions: new Set(),
+          };
+          if (guardrail.version) entry.versions.add(String(guardrail.version));
+          byId.set(guardrail.id, entry);
+        }
+        const returnedToken = out?.nextToken;
+        if (!returnedToken || returnedToken === nextToken) break;
+        nextToken = returnedToken;
+      }
+      return [...byId.values()].map(entry => {
+        const versions = [...entry.versions];
+        if (!versions.includes('DRAFT')) versions.unshift('DRAFT');
+        return { id: entry.id, arn: entry.arn, name: entry.name, versions };
+      }).slice(0, 100);
+    } catch {
+      return [];
+    }
+  }
+
+  return { converse, listModels, listGuardrails };
 }
 
 module.exports = { createBedrockTransport, mapAwsError, extractText, bedrockNotInstalledError, BEDROCK_NOT_INSTALLED };

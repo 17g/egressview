@@ -6,6 +6,9 @@ const { parseRequest } = require('../http-validation');
 const { buildAiFacts } = require('../ai-facts');
 const { buildAiContext } = require('../ai-context');
 const { randomUUID } = require('node:crypto');
+const { monthlyRanges, pricingCoverage, pricingMetadata, pricingStatus } = require('../ai-usage');
+const { AI_PRIOR_ANALYSIS_MAX_CHARS } = require('../ai-limits');
+const logger = require('../logger');
 
 const providerSchema = z.enum(['disabled', 'ollama', 'anthropic', 'openai', 'bedrock']);
 const cloudProviderSchema = z.enum(['anthropic', 'openai']);
@@ -45,6 +48,7 @@ const configSchema = z.object({
   }).strict().optional(),
 }).strict();
 const emptySchema = z.object({}).strict();
+const bedrockModelDiscoverySchema = z.object({ region: regionSchema }).strict();
 const timestampSchema = z.coerce.number().int().nonnegative();
 const factsQuerySchema = z.object({
   from: timestampSchema,
@@ -64,15 +68,75 @@ const chatSchema = analysisSchema.extend({
   message: z.string().trim().min(1).max(4000),
   // Optional text of the most recent "analyze current period" result so the
   // chat can reason about the same threats. Bounded to keep the prompt small.
-  priorAnalysis: z.string().max(8000).optional(),
+  priorAnalysis: z.string().max(AI_PRIOR_ANALYSIS_MAX_CHARS).optional(),
 });
 const conversationParamsSchema = z.object({ id: idSchema }).strict();
+const usageQuerySchema = z.object({
+  timezoneOffset: z.coerce.number().int().min(-840).max(840).default(0),
+}).strict();
+const pricingCheckSchema = z.object({
+  provider: z.enum(['ollama', 'anthropic', 'openai', 'bedrock']),
+  model: z.string().trim().min(1).max(400),
+}).strict();
 
-module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, history, threatIntel, routerManager }) {
+module.exports = function aiRoutes({
+  requireAdmin, aiProvider, saveConfig, history, threatIntel, routerManager, devices, asus,
+}) {
   const router = Router();
+  const warnedUnpricedModels = new Set();
+
+  function persistUsage(result, { kind, requestId = randomUUID(), conversationId = null } = {}) {
+    if (!result || typeof history?.appendAiUsage !== 'function') return;
+    if (!result.usage && !result.text && result.verified !== true) return;
+    const usage = result.usage || { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    const pricing = result.pricing || {};
+    const unpricedKey = `${result.provider || 'unknown'}/${result.model || 'unknown'}`;
+    if (usage.totalTokens > 0 && !result.pricing && !warnedUnpricedModels.has(unpricedKey)) {
+      warnedUnpricedModels.add(unpricedKey);
+      logger.warn(`[ai] Pricing unavailable; cost total is partial: ${JSON.stringify({
+        provider: result.provider || 'unknown', model: result.model || 'unknown',
+      })}`);
+    }
+    try {
+      history.appendAiUsage({
+        usageId: randomUUID(),
+        requestId,
+        conversationId,
+        kind,
+        createdAt: result.generatedAt || Date.now(),
+        provider: result.provider,
+        model: result.model || '',
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        estimatedCostUsd: Number.isFinite(result.estimatedCostUsd) ? result.estimatedCostUsd : null,
+        pricingVersion: pricing.pricingVersion || null,
+        inputUsdPerMillion: pricing.inputUsdPerMillion ?? null,
+        outputUsdPerMillion: pricing.outputUsdPerMillion ?? null,
+      });
+    } catch (error) {
+      // Usage telemetry must not discard a successfully generated answer.
+      logger.warn('[ai] Usage persistence failed:', error.message);
+    }
+  }
+
+  function withModelPricing(result) {
+    const models = Array.isArray(result?.models) ? result.models : [];
+    return { ...result, modelPricing: pricingCoverage(result?.provider, models) };
+  }
+
+  function publicConfigWithPricing() {
+    const publicConfig = aiProvider.getPublicConfig();
+    const provider = publicConfig.provider;
+    const model = publicConfig.models?.[provider] || '';
+    return {
+      ...publicConfig,
+      selectedModelPricing: provider === 'disabled' || !model ? null : pricingStatus(provider, model),
+    };
+  }
 
   router.get('/config/ai', requireAdmin, (_req, res) => {
-    res.json(aiProvider.getPublicConfig());
+    res.json(publicConfigWithPricing());
   });
 
   router.post('/config/ai', requireAdmin, (req, res) => {
@@ -107,16 +171,56 @@ module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, histo
         error: validationError ? error.message : 'Settings were not saved. Check server logs.',
       });
     }
-    res.json({ success: true, ...aiProvider.getPublicConfig() });
+    res.json({ success: true, ...publicConfigWithPricing() });
   });
 
   router.post('/ai/test', requireAdmin, async (req, res) => {
     const parsed = parseRequest(emptySchema, req.body, res);
     if (!parsed.ok) return;
     try {
-      res.json({ success: true, ...await aiProvider.testConnection() });
+      const result = await aiProvider.testConnection();
+      persistUsage(result, { kind: 'test' });
+      res.json({ success: true, ...withModelPricing(result) });
     } catch (error) {
       res.status(400).json({ success: false, error: error.message });
+    }
+  });
+
+  // Discovery-only model listing (no InvokeModel verification, no config save).
+  // Lets the settings UI populate the model dropdown for a region so the
+  // inference-profile filter has data to work with, without a full test.
+  router.post('/ai/models', requireAdmin, async (req, res) => {
+    const parsed = parseRequest(bedrockModelDiscoverySchema, req.body, res);
+    if (!parsed.ok) return;
+    try {
+      res.json({ success: true, ...withModelPricing(await aiProvider.listModels({
+        provider: 'bedrock',
+        region: parsed.data.region,
+      })) });
+    } catch (error) {
+      res.status(400).json({ success: false, error: error.message });
+    }
+  });
+
+  router.post('/ai/pricing/check', requireAdmin, (req, res) => {
+    const parsed = parseRequest(pricingCheckSchema, req.body, res);
+    if (!parsed.ok) return;
+    res.json({ success: true, ...pricingStatus(parsed.data.provider, parsed.data.model) });
+  });
+
+  // Discovery-only Guardrail listing for the region (no InvokeModel, no save).
+  // Fail-open: missing bedrock:ListGuardrails yields an empty list so the UI
+  // falls back to manual guardrail id/version entry.
+  router.post('/ai/guardrails', requireAdmin, async (req, res) => {
+    const parsed = parseRequest(bedrockModelDiscoverySchema, req.body, res);
+    if (!parsed.ok) return;
+    try {
+      res.json({ success: true, ...await aiProvider.listGuardrails({
+        provider: 'bedrock',
+        region: parsed.data.region,
+      }) });
+    } catch (error) {
+      res.status(400).json({ success: false, error: error.message, guardrails: [] });
     }
   });
 
@@ -142,6 +246,45 @@ module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, histo
     }
   });
 
+  router.get('/ai/usage/monthly', requireAdmin, (req, res) => {
+    const parsed = parseRequest(usageQuerySchema, req.query, res);
+    if (!parsed.ok) return;
+    try {
+      const ranges = monthlyRanges(Date.now(), parsed.data.timezoneOffset);
+      const summarizePeriod = range => ({
+        ...range,
+        ...history.summarizeAiUsage(range.from, range.to),
+        unpricedModels: typeof history.summarizeUnpricedAiUsage === 'function'
+          ? history.summarizeUnpricedAiUsage(range.from, range.to)
+          : [],
+      });
+      res.json({
+        pricing: { ...pricingMetadata(), approximate: true },
+        selectedModel: publicConfigWithPricing().selectedModelPricing,
+        current: summarizePeriod(ranges.current),
+        previous: summarizePeriod(ranges.previous),
+      });
+    } catch {
+      res.status(500).json({ error: 'AI usage could not be calculated' });
+    }
+  });
+
+  router.get('/ai/pricing/diagnostics', requireAdmin, (req, res) => {
+    const parsed = parseRequest(usageQuerySchema, req.query, res);
+    if (!parsed.ok) return;
+    try {
+      const ranges = monthlyRanges(Date.now(), parsed.data.timezoneOffset);
+      res.json({
+        pricing: pricingMetadata(),
+        selectedModel: publicConfigWithPricing().selectedModelPricing,
+        currentUnpricedModels: history.summarizeUnpricedAiUsage(ranges.current.from, ranges.current.to),
+        previousUnpricedModels: history.summarizeUnpricedAiUsage(ranges.previous.from, ranges.previous.to),
+      });
+    } catch {
+      res.status(500).json({ error: 'AI pricing diagnostics could not be calculated' });
+    }
+  });
+
   router.post('/ai/analyze', requireAdmin, async (req, res) => {
     const parsed = parseRequest(analysisSchema, req.body, res);
     if (!parsed.ok) return;
@@ -156,12 +299,14 @@ module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, histo
     try {
       const routers = routerManager.list();
       const facts = buildAiFacts({ history, threatIntel, routers, from, to });
-      const context = buildAiContext({ facts, history, routers, from, to, threatIntel });
-      res.json({ success: true, range: { from, to }, ...await aiProvider.generateInsight(context, {
+      const context = buildAiContext({ facts, history, routers, from, to, threatIntel, devices, asus });
+      const result = await aiProvider.generateInsight(context, {
         signal: controller.signal,
         cloudConsentConfirmed: parsed.data.cloudConsentConfirmed,
         language: parsed.data.language,
-      }) });
+      });
+      persistUsage(result, { kind: 'analysis' });
+      res.json({ success: true, range: { from, to }, ...result });
     } catch (error) {
       const status = error.code === 'AI_BUSY' ? 409 : error.code === 'AI_CONSENT_REQUIRED' ? 403 : 400;
       res.status(status).json({ success: false, error: error.message });
@@ -199,12 +344,17 @@ module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, histo
     }
     const publicConfig = aiProvider.getPublicConfig();
     if (publicConfig.provider === 'disabled') return res.status(400).json({ error: 'AI provider is disabled' });
-    const conversationId = parsed.data.conversationId || randomUUID();
+    let conversationId = parsed.data.conversationId || randomUUID();
     const requestId = parsed.data.requestId || randomUUID();
     const model = publicConfig.models[publicConfig.provider] || '';
     const existingConversation = history.getConversation(conversationId);
+    let startedNewConversation = false;
     if (existingConversation && (existingConversation.provider !== publicConfig.provider || existingConversation.model !== model)) {
-      return res.status(409).json({ error: 'Continue this conversation with its original provider and model' });
+      // A provider/model switch must not mix identities inside an append-only
+      // conversation. Preserve the old history and continue the question in a
+      // fresh conversation instead of rejecting an otherwise valid request.
+      conversationId = randomUUID();
+      startedNewConversation = true;
     }
     history.createConversation({
       conversationId, createdAt: Date.now(), provider: publicConfig.provider, model, rangeFrom: from, rangeTo: to,
@@ -229,7 +379,7 @@ module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, histo
     try {
       const routers = routerManager.list();
       const facts = buildAiFacts({ history, threatIntel, routers, from, to });
-      const context = buildAiContext({ facts, history, routers, from, to, threatIntel });
+      const context = buildAiContext({ facts, history, routers, from, to, threatIntel, devices, asus });
       const response = await aiProvider.generateInsight(context, {
         signal: controller.signal,
         cloudConsentConfirmed: parsed.data.cloudConsentConfirmed,
@@ -244,7 +394,16 @@ module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, histo
         createdAt: Date.now(), provider: response.provider, model: response.model, rangeFrom: from, rangeTo: to,
         status: 'complete', errorCode: null,
       });
-      res.json({ success: true, conversationId, requestId, message: assistant });
+      persistUsage(response, { kind: 'chat', requestId, conversationId });
+      res.json({
+        success: true,
+        conversationId,
+        requestId,
+        startedNewConversation,
+        message: assistant,
+        usage: response.usage,
+        estimatedCostUsd: response.estimatedCostUsd,
+      });
     } catch (error) {
       history.appendMessage({
         messageId: randomUUID(), conversationId, requestId, role: 'assistant', body: null,
@@ -252,7 +411,9 @@ module.exports = function aiRoutes({ requireAdmin, aiProvider, saveConfig, histo
         status: 'failed', errorCode: error.code || error.name || 'AI_ERROR',
       });
       const status = error.code === 'AI_BUSY' ? 409 : error.code === 'AI_CONSENT_REQUIRED' ? 403 : 400;
-      res.status(status).json({ success: false, conversationId, requestId, error: error.message });
+      res.status(status).json({
+        success: false, conversationId, requestId, startedNewConversation, error: error.message,
+      });
     }
   });
 

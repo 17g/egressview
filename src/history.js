@@ -12,6 +12,7 @@ const { checkObservationConsistency: checkConsistency } = require('./observation
 const { createHistoryCache, DEFAULT_HOT_MAX_ENTRIES } = require('./history-cache');
 const { createHistoryQueries } = require('./history-queries');
 const { createAiConversationStore } = require('./ai-conversation-store');
+const { createAiUsageStore } = require('./ai-usage-store');
 
 const DEFAULT_DB_PATH = process.env.EGRESSVIEW_DB_PATH || process.env.EGRESSVIEW_DB
   ? path.resolve(process.env.EGRESSVIEW_DB_PATH || process.env.EGRESSVIEW_DB)
@@ -95,6 +96,7 @@ const {
   groupDstByTimeRange,
   groupServiceByTimeRange,
   groupSrcForDstsByTimeRange,
+  groupSrcByTimeRange,
   summarizeByTimeRange,
 } = createHistoryQueries({
   getDb: () => db,
@@ -111,6 +113,7 @@ const {
 });
 
 const aiConversationStore = createAiConversationStore({ getDb: () => db });
+const aiUsageStore = createAiUsageStore({ getDb: () => db });
 
 function _secureDbFiles() {
   for (const suffix of ['', '-shm', '-wal']) {
@@ -739,8 +742,10 @@ module.exports = {
   groupDstByTimeRange,
   groupServiceByTimeRange,
   groupSrcForDstsByTimeRange,
+  groupSrcByTimeRange,
   summarizeByTimeRange,
   ...aiConversationStore,
+  ...aiUsageStore,
   getKnownMacs,
   upsertRouterMetadata,
   tombstoneRouterMetadata,

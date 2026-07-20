@@ -8,7 +8,7 @@ No new hardware. No inline traffic interception. Works via the NAT session table
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D22-green)
-![Release](https://img.shields.io/badge/release-v1.4.0-3fb950)
+![Release](https://img.shields.io/badge/release-v1.5.0-3fb950)
 
 > 🇯🇵 [日本語版 README はこちら](README.ja.md) | 🌐 [Project Page](https://yo1t.github.io/egressview/)
 
@@ -18,9 +18,11 @@ No new hardware. No inline traffic interception. Works via the NAT session table
 
 EgressView is production-oriented for home/SOHO networks using Yamaha RTX or Cisco IOS. ASUS AP support and optional data sources are maintained as companion integrations.
 
-### What's new in v1.4.0
+### What's new in v1.5.0
 
-Version 1.4.0 adds a mobile monitoring view, filtered connection-history export in CSV/JSON, explicit manual threat investigation, and a Linux conntrack preview. It also completes the multi-router schema v5 migration, removes HTML-string rendering and the remaining inline-style CSP exception, and strengthens database restore and configuration persistence with fail-closed verification. See the [changelog](CHANGELOG.md) for upgrade details.
+Version 1.5.0 makes AI Insights the start page, with local live metrics, previous-period comparisons, explicit manual analysis/chat through Ollama, Anthropic, OpenAI, or Amazon Bedrock, append-only conversations, and monthly token/cost estimates. It also adds Bedrock model, inference-profile, and Guardrail discovery, runtime CPU diagnostics, and collection-path performance improvements. See the [changelog](CHANGELOG.md) for upgrade details.
+
+Existing databases migrate automatically to schema v7. Startup creates and verifies a complete backup first, and stops without changing the database if free-space, checkpoint, copy, or integrity verification fails. Linux conntrack remains a Docker-validated preview pending physical-router validation.
 
 Existing databases upgrade automatically. Before schema v5 is applied, EgressView creates and verifies a backup and checks observation consistency; startup stops without modifying the database if either check fails. Linux conntrack remains a Docker-validated preview pending physical-router testing.
 
@@ -36,6 +38,7 @@ EgressView answers the question most home users can't ask: *what is each device 
 - **Manual threat investigation** — explicitly query AbuseIPDB, VirusTotal, or AlienVault OTX with server-side caching and rate limits ([guide](docs/manual-threat-investigation.md))
 - **Linux conntrack preview** — collect from Linux-based routers over SSH; Docker integration verified, hardware validation pending ([setup](docs/setup-conntrack.md))
 - **Mobile monitoring view** — check router health, Graph Map, Statistics, Connection Log, Devices, and Detection Log from a phone on your VPN/private network
+- **AI Insights start page** — opens with collection health, connections, devices, destinations, threats, and previous-period comparisons. Manual analysis/chat can use bounded device inventory and ASUS node summaries through Ollama, Anthropic, OpenAI, or Amazon Bedrock, with versioned-catalog monthly tokens/estimated cost, explicit partial totals for unpriced models, and per-answer model/cost metadata ([setup guide](docs/setup-ai-insights.md), [Bedrock production setup](docs/setup-bedrock.md))
 - **Instant Slack alerts** — DM the moment any device connects to a known C2 server or malware distribution host
 - **No hardware changes** — runs on any Mac, PC, or Raspberry Pi alongside your existing Yamaha RTX or Cisco IOS routers
 
@@ -53,11 +56,12 @@ EgressView answers the question most home users can't ask: *what is each device 
 - Uses **Graph Map** and **Statistics** for whole-network overview, then **Connection Log** and **Devices** for per-session and per-device drill-down
 - Optionally connects to an **ASUS WiFi access point** (used as AP/mesh, not as a router) to get WiFi client details (band, signal strength, traffic rates, AiMesh topology)
 - Keeps a **connection history** in **SQLite** (WAL mode, crash-safe; configurable retention up to 2 years)
+- Inventories normal and pre-migration backups, warns when the next migration lacks disk headroom, and offers dry-run cleanup that preserves verified restore points
 - **Connection log**: sortable/searchable table of all sessions with threat status badges; **App column** infers the application or service name from port number and destination hostname (APNs, FCM, AirPlay, MQTT/TLS, QUIC, iCloud, YouTube, AWS, Slack, Zoom, Tuya Smart, Gaijin/DCS, and more)
 - **🔔 Detection Log** — persistent history of all threat detections and new-device alerts, with per-column filter, sort, and click-to-detail popup; logged regardless of Slack configuration
 - **📡 Data Sources tab** — configure each data source (dnsmasq / [INSPECT] / [DHCPD]) independently from the settings UI
 - **🤖 AI Agent access (MCP)** — built-in [Model Context Protocol](https://modelcontextprotocol.io/) server exposes 11 tools (traffic summary, threat connections, top destinations, device list, device notes, and more) to AI assistants such as AWS Kiro, Anthropic Claude, and Anysphere Cursor; supports both stdio and HTTP transport
-- Single-page dark-themed UI: Graph Map, Statistics, Connection Log, Devices, Detection Log, and Settings
+- Single-page dark-themed UI with **✦ AI Insights** as the leftmost start page, plus Graph Map, Statistics, Connection Log, Devices, Detection Log, and Settings
 
 ## Demo
 
@@ -71,6 +75,7 @@ Connection Log and Devices let you drill down into suspicious destinations, nois
 
 ## Screenshots
 
+![AI Insights overview](docs/assets/egressview-ai-insights-en.png)
 ![Graph Map overview](docs/assets/egressview-graph-map.png)
 ![Statistics view](docs/assets/egressview-statistics.png)
 ![Connection Log drill-down](docs/assets/egressview-connection-log.png)
@@ -193,6 +198,7 @@ Start with the smallest path that matches your network, then add sources later f
 | ✅ | Node.js 22+ installed on your Mac/PC/Raspberry Pi | [nodejs.org](https://nodejs.org) |
 | ✅ | At least one Yamaha RTX or Cisco IOS router with SSH enabled | [Yamaha guide →](docs/setup-yamaha.md) / [Cisco guide →](docs/setup-cisco.md) |
 | ☐ | (Optional) ASUS WiFi AP with web admin enabled | [Setup guide →](docs/setup-asus.md) |
+| ☐ | (Optional) in-app AI Insights (Ollama / Anthropic / OpenAI / Amazon Bedrock) | [Setup guide →](docs/setup-ai-insights.md) |
 | ☐ | (Optional) AI assistant access via MCP (AWS Kiro, Anthropic Claude, Anysphere Cursor…) | [Setup guide →](docs/setup-mcp.md) |
 
 ### Step 2 — Install and launch

@@ -1,253 +1,193 @@
 # EgressView コード品質レポート
 
-- **評価日**: 2026-07-18
-- **コミット**: `9968c18a3a3d4e418d6d09e97b38c56095c2899a` (main)
-- **バージョン**: 1.4.0
-- **Node.js**: >=22 (テスト: 22, 24)
-- **評価者**: 自動静的解析 + 手動コードレビュー (Kiro AI)
+- **評価日**: 2026-07-20
+- **評価基準**: PR #111後のmain `e4dd97c`。本レビューでのメモ永続化修正を含む
+- **バージョン**: 1.5.1
+- **Node.js**: >=22（CI: 22 / 24）
+- **評価方法**: 自動テスト、V8 coverage、静的解析、依存・secret scan、browser smoke、手動コードレビュー
+
+> 本レポートは現在のmainを評価します。SonarQubeとOpenSSFのスコアはリポジトリ内容からの推定で、公式scannerは実行していません。penetration testとfuzzing campaignも対象外です。
 
 ---
 
-## Executive Summary
+## 総合評価
 
 **総合グレード: A**
 
-EgressView は評価した全フレームワークにおいて**プロダクショングレードの品質**を示しています。v1.3.5 からの改善として、enrichment キャッシュ TTL の最適化 (RDAP/Geo 30日, 起動時 API 負荷削減)、バックグラウンドスロットリング、bounded ライブグラフ詳細、モバイル対応ビューが追加されました。テスト対ソース比率 93.7% を維持しつつ、ソースコード +280行・テストコード +189行の機能拡張が達成されています。
+CriticalまたはHighの不具合は見つかりませんでした。中程度の信頼性問題を1件発見し、本レビューで修正しました。端末メモのファイル保存に失敗した場合、手動保存、自動調査、端末統合の各経路で未保存のruntime状態が残る可能性がありました。現在は全3経路をfail-closedにし、直前のメモ状態へrollbackし、成功通知を抑止し、関連する端末統合も開始しない実装です。
 
-| # | フレームワーク | スコア | 判定 |
-|---|---|---|---|
-| 1 | OWASP ASVS Level 1 | 13/14 セクション適合 | ✅ 適合 |
-| 2 | OpenSSF Scorecard | ~8.2/10 | 上位 15% |
-| 3 | ISO/IEC 25010 | 平均 8.6/10 | 高品質 |
-| 4 | Node.js Best Practices (goldbergyoni) | 44/50 (88%) | 優秀 |
-| 5 | SonarQube Quality Gate (推定) | 全項目 A (Coverage 除く) | ✅ PASSED |
+SOHO向けself-hosted network monitorとして、自動品質管理は強固です。endpointを持つ全route moduleでstrict Zodを利用し、API 71件中69件を認証で保護し、DB migration/restoreはfail-closed、HTTP logはrequest IDで相関でき、backup検証はmain event loopから分離されています。主な残余リスクは、実機依存integrationが通常CI対象外であること、複数の大きなorchestration module、Internetへ直接公開する場合の追加境界防御です。
 
-### 主な強み
+| 評価軸 | 結果 | 判定 |
+|---|---:|---|
+| OWASP ASVS Level 1 | 14領域中13領域が適合または緩和済み | private network前提で適合 |
+| OpenSSF Scorecard | 推定約8.4/10 | 強いrepository hygiene |
+| ISO/IEC 25010 | 平均8.6/10 | 高品質 |
+| Node.js Best Practices | 45/50 | 優秀 |
+| SonarQube相当gate | 合格、coverageはB | High以上のblockerなし |
 
-- **セキュリティ設計** — scrypt パスワードハッシュ, タイミングセーフなトークン比較, リクエスト毎 CSP nonce, `style-src 'self'`, CI 統合 ASH + secret scan + npm audit, SHA ピン留め GitHub Actions (2 ワークフロー)
-- **テスト文化** — 84 unit + 4 integration + Playwright smoke (1,163行); テスト対ソース比率 93.7%; 全ドメインモジュールで `_resetForTest()` パターン (15箇所)
-- **コード規律** — サーバーサイド `var` ゼロ, `eval` ゼロ, TODO/FIXME ゼロ, 命名規約一貫, ESLint v10 + innerHTML 監査
-- **入力検証** — HTTP ルートに zod スキーマ検証を段階展開 (5/13 ルートファイル, `http-validation.js` ヘルパー, スキーマ定義 39個)
-- **最小依存** — 本番パッケージ 11 個のみ; Dependabot (cooldown 7日)
-- **性能最適化** — enrichment キャッシュ 30日 TTL, バックグラウンドスロットリング, bounded ライブグラフ, stale 一括リフレッシュ
+## レビュー結果
 
-### v1.3.5 からの主な変更点
+### 本レビューで修正
 
-| 項目 | v1.3.5 (65de148) | v1.4.0 (現在) | 変化 |
-|---|---|---|---|
-| ソースコード行数 | 19,975 | 20,255 | +280 (+1.4%) |
-| テストコード行数 | 18,793 | 18,982 | +189 (+1.0%) |
-| テスト対ソース比率 | 94.1% | 93.7% | -0.4pp (微減) |
-| バージョン | 1.3.5 | 1.4.0 | メジャー機能リリース |
-| enrichment RDAP TTL | 不明 | 30日 | 起動負荷削減 |
-| enrichment Geo TTL | 不明 | 30日 (private IP: 永久) | API コール削減 |
-| ライブグラフ | 無制限描画 | bounded 詳細表示 | パフォーマンス改善 |
-| モバイルビュー | なし | レスポンシブ対応 | UX 改善 |
+**中: 端末メモ保存がfail-open。** `src/notes.js`がfilesystem errorを握り潰し、手動保存、自動調査、端末統合の各経路で未保存のmemory変更が残る可能性がありました。再起動時のメモ消失に加え、メモ移行失敗後に端末統合が進む不整合も起こり得ました。現在は全経路で変更前snapshotを取得し、保存失敗時にruntime状態を復元し、成功通知を抑止し、端末統合を開始しません。HTTP 500、rollback、通知抑止、DB変更抑止をunit testで固定しました。
 
-### v1.2.2 からの累積変更点
+### 残余リスク
 
-| 項目 | v1.2.2 | v1.4.0 (現在) | 変化 |
-|---|---|---|---|
-| ソースコード行数 | 16,791 | 20,255 | +20.6% |
-| テストコード行数 | 12,577 | 18,982 | +50.9% |
-| テスト対ソース比率 | 74.9% | 93.7% | +18.8pp |
-| ユニットテストファイル | 54 | 84 | +30 |
-| インテグレーションテスト | 3 | 4 | +1 |
-| ソースモジュール (src/) | 48 | 69 | +21 |
-| ポーラー (src/pollers/) | 11 | 15 | +4 |
-| ルートファイル (src/routes/) | 10 | 13 | +3 |
-| API エンドポイント | 46 | 56 | +10 |
-| 本番依存パッケージ | 10 | 11 | +1 (zod) |
-| requireAdmin 適用ルート | 62 | 79 | +17 |
-| zod 検証適用ルート | 0/10 | 5/13 | +5 |
-| ドキュメント (docs/*.md) | 14 | 22 | +8 |
-
-### 主なギャップと次のステップ
-
-| 優先度 | ギャップ | 推定工数 |
-|---|---|---|
-| 高 | コードカバレッジ計測 (c8) | 2h |
-| 高 | 残り 8 ルートファイルへの zod 検証展開 | 4h |
-| 中 | Health-check エンドポイント | 0.5h |
-| 中 | リクエスト ID (X-Request-Id) | 1h |
-| 中 | マジックナンバー 8000ms を定数化 (10箇所) | 1h |
-| 低 | OpenAPI スキーマ / Dockerfile | 6h |
-
-残りのギャップは家庭内/SOHO ネットワーク監視ツールとしては典型的であり、アーキテクチャ変更なしに段階的に対応可能です。
+- **中・運用**: hardware/external service依存のintegration test 4ファイルはdefault CI workflowに含まれません。unitとbrowser smokeはfixture/demo modeで動きますが、Yamaha、ASUS、Slack、conntrackの確認には明示的な環境が必要です。
+- **低・保守性**: `history.js`（761行）、`public/js/log.js`（715行）、`public/js/graph.js`（675行）、`devices.js`（665行）、Cisco/Yamaha pollerは引き続き大きな変更面です。重要parserとdata pathにはtestがありますが、今後も既存の段階的抽出を維持すべきです。
+- **低・条件付きsecurity**: 現行設計はVPN/private networkとheader token/session認証が前提です。Internetへ直接公開、またはmulti-user化する場合は、信頼できるTLS reverse proxy、IP allowlist、proxy側global rate limit、監査可能なclient IP処理を先に追加します（P2-41）。
+- **低・ecosystem**: OpenAPI、署名付きrelease、継続fuzzing、OCI imageはありません。現時点では需要発生時のtaskで、release blockerではありません。
 
 ---
 
-## コードベースメトリクス
+## 実測結果
+
+| 検査 | 結果 |
+|---|---|
+| Coverage付きunit test | 1,465件成功、失敗0 |
+| V8 coverage | line 79.36%、branch 79.40%、function 75.94% |
+| CI coverage下限 | line 70%、branch 75%、function 65% - 合格 |
+| Playwright browser smoke | 64件成功、条件付き1件skip |
+| ESLint | 合格 |
+| Frontend HTML挿入監査 | `innerHTML` / `insertAdjacentHTML` 0件 |
+| Production依存監査 | 脆弱性0件 |
+| Secret scan | 高確度secret・環境固有LAN IPなし |
+| Package dry-run | 成功、178 entries |
+| PR #111 GitHub CI | Node 22/24、release safety、ASH、browser smoke、Pages build成功 |
+
+### コードベースメトリクス
 
 | メトリクス | 値 |
-|---|---|
-| ソースコード行数 (server + src + public/js + mcp) | 20,255 |
-| テストコード行数 (unit + integration + smoke) | 18,982 |
-| テスト対ソース比率 | 93.7% |
-| ユニットテストファイル数 | 84 |
-| インテグレーションテストファイル数 | 4 |
-| Smoke テスト (Playwright) ファイル数 | 1 |
-| ソースモジュール数 (src/) | 69 |
-| ポーラー数 (src/pollers/) | 15 |
-| ルートファイル数 (src/routes/) | 13 |
-| API エンドポイント数 | 56 |
-| 本番依存パッケージ数 | 11 |
-| 関数あたり平均行数 | ~15.7 |
-| 深いネスト行数 (>5レベル) | 7 |
-| `var` 使用箇所 (サーバーサイド) | 0 |
-| `eval` / `new Function` 使用箇所 | 0 |
-| TODO/FIXME/HACK コメント | 0 |
-| パラメータ化 SQL 文 | 99 |
-| requireAdmin 適用ルート | 79 |
-| zod スキーマ定義 (HTTP ルート) | 39 |
+|---|---:|
+| Source行数（server、mcp、src、public/js） | 24,271 |
+| Test行数（unit、integration、smoke） | 22,465 |
+| Test対source比率 | 92.6% |
+| Unit test file | 102 |
+| Integration test file | 4 |
+| Browser smoke | 1 file（1,497行） |
+| `src/` module | 85 |
+| Poller module | 15 |
+| Route module | 14 |
+| HTTP endpoint | 73（API 71 + health 2） |
+| 認証済みAPI endpoint | 69/71 |
+| 公開API endpoint | login、admin token verify |
+| 公開運用endpoint | `/healthz`、`/readyz`。固定最小responseのみ |
+| strict Zod適用済みendpoint route module | 13/13 |
+| Production依存package | 12 |
+| Parameterized SQL preparation | 117 |
+| Server-side `var` | 0 |
+| `eval` / `new Function` | 0 |
+| TODO/FIXME/HACK | 0 |
 
 ---
 
 ## 1. OWASP ASVS Level 1
 
-**判定: 適合 (13/14 カテゴリ合格)**
+**判定: 文書化されたprivate network前提で適合（14領域中13領域が適合または緩和済み）。**
 
-| カテゴリ | 状況 | 根拠 |
+| 領域 | 状況 | 根拠 |
 |---|---|---|
-| V2 認証 | ✅ | scrypt (N=16384, r=8, p=1), timingSafeEqual, 256bit セッショントークン, ブルートフォース防御 (5回/5分ロック), パスワード 8-256文字, zod スキーマ検証 |
-| V3 セッション管理 | ✅ | トークン SHA-256 ハッシュ保存, 30日スライディング失効, パスワード変更時に全セッション無効化, 定期 prune, タッチスロットル (5分) |
-| V4 アクセス制御 | ✅ | 79 ルートに `requireAdmin` 適用、未認証は login/verify の 2 エンドポイントのみ |
-| V5 入力検証 | ✅ | Body 64KB 制限, zod スキーマ検証 (5/13 ルート, `http-validation.js` ヘルパー), プライベート IP のみルーターアクセス許可 (SSRF 防止), パストラバーサル防止, null バイト拒否 |
-| V6 暗号化 | ✅ | scrypt (パスワード), randomBytes (トークン/nonce/salt), SHA-256 (TOFU ホスト鍵/セッション), timingSafeEqual |
-| V7 エラー処理 | ✅ | 汎用 500 レスポンス, スタックトレース非露出, タイミング攻撃対策 (500ms 遅延) |
-| V8 データ保護 | ✅ | 設定ファイル mode 0o600, バックアップ 0o600, TLS 秘密鍵 0o600, ログにパスワード非出力 |
-| V9 通信セキュリティ | ✅ | HTTPS opt-in + HSTS (max-age 1年), CSP (リクエスト毎 nonce, style-src 'self') |
-| V10 悪意コード | ✅ | eval/new Function ゼロ, innerHTML 使用を CI で監査 (allowlist 方式) |
-| V12 ファイル操作 | ✅ | アップロードサイズ制限, バックアップ名 zod 検証 (1-255文字), パストラバーサル防止 |
-| V13 API セキュリティ | ✅ | JSON 専用, express.json 64KB 制限, メソッド別ルート, zod `.strict()` で不明フィールド拒否 |
-| V14 設定 | ✅ | ハードコード秘密情報なし, env/config file 経由, CI secret scan |
-| V11 ビジネスロジック | ⚠️ | CSRF 明示的対策なし (same-origin CSP + token 認証で緩和) |
+| 認証 | 合格 | scrypt、timing-safe比較、256bit session token、失敗遅延、IP単位lockout |
+| Session管理 | 合格 | token hash保存、sliding expiry、revoke、password変更処理、定期prune |
+| Access control | 合格 | API 71件中69件に`requireAdmin`。WebSocket handshakeも同じ認証境界 |
+| 入力検証 | 合格 | JSON 64KB、13/13 endpoint moduleのstrict Zod、未知key拒否、文字列・範囲上限 |
+| 暗号 | 合格 | secret/correlationの`randomBytes`/UUID、session/TOFUのSHA-256、timing-safe equality |
+| Error処理 | 合格 | 汎用500、stack非公開、request ID付きserver log |
+| Data保護 | 合格 | config/backup/TLS keyは0600、公開config/logからsecret除外 |
+| 通信 | 条件付き合格 | HTTPS/HSTS対応。既定はprivate network/VPN運用 |
+| 悪意コード | 合格 | evalなし、frontend HTML挿入監査をCIで強制 |
+| File処理 | 合格 | upload上限、backup名検証、traversal防止、restore/migration fail-closed |
+| API security | 合格 | method別route、strict schema、response size/time上限、認証付きexport |
+| Configuration | 合格 | hard-coded credentialなし、example設定、secret scan、production demo拒否 |
+| Business logic | 緩和済み | cookie認証を使わず明示header tokenを使用。cookie authやInternet直接公開時は再評価 |
+
+Health endpointは意図的に未認証ですが、`no-store`付きの固定liveness/readinessのみを返し、router IP、credential、件数は公開しません。
 
 ---
 
-## 2. OpenSSF Scorecard (推定)
+## 2. OpenSSF Scorecard（推定）
 
-**推定スコア: 8.2/10**
+**推定スコア: 8.4/10。**
 
-| チェック項目 | スコア | 根拠 |
-|---|---|---|
-| Pinned-Dependencies | 10/10 | 全 GitHub Actions を SHA ピン留め + バージョンコメント (ci.yml + pages.yml) |
-| Token-Permissions | 10/10 | `permissions: contents: read` (最小権限), pages は `pages: write` + `id-token: write` のみ |
-| Dangerous-Workflow | 10/10 | `pull_request_target` なし |
-| Binary-Artifacts | 10/10 | バイナリなし |
-| Security-Policy | 10/10 | SECURITY.md + GitHub private reporting |
-| License | 10/10 | AGPL-3.0-only |
-| SAST | 10/10 | ASH スキャナー + カスタム secret scan + innerHTML 監査 (CI) |
-| Vulnerabilities | 10/10 | `npm audit --omit=dev` (CI) |
-| Dependency-Update-Tool | 10/10 | Dependabot (npm + Actions, weekly, cooldown 7日) |
-| CI-Tests | 10/10 | Unit + Integration + Playwright smoke, Node 22/24 マトリクス |
-| Maintained | 9/10 | 活発なリリース (v1.0.0→v1.4.0, 78 PR merged), PR テンプレート, CONTRIBUTING.md |
-| Code-Review | 7/10 | PR テンプレート + CI 必須 (branch protection は確認不可) |
-| Fuzzing | 0/10 | なし (ネットワーク監視ツールでは一般的) |
-| Signed-Releases | 0/10 | GPG 署名なし (git clone 配布) |
+| Check | Score | 根拠 |
+|---|---:|---|
+| Pinned dependencies | 10 | 全GitHub Actionをfull commit SHAへ固定 |
+| Token permissions | 10 | 既定read-only。Pagesだけ必要権限を追加 |
+| Dangerous workflow | 10 | `pull_request_target`なし |
+| Binary artifacts | 10 | commit済みbinaryなし |
+| Security policy | 10 | `SECURITY.md`とprivate vulnerability reporting |
+| License | 10 | AGPL-3.0-only |
+| SAST | 10 | ASH、secret scan、ESLint、frontend挿入監査 |
+| Vulnerabilities | 10 | production `npm audit`をCI実行。本レビュー0件 |
+| Dependency updates | 10 | npm/Actionsのweekly Dependabot、7日cooldown |
+| CI tests | 9 | PRでunit/coverageとbrowser smoke。実機integrationは明示実行 |
+| Maintained | 10 | PR #111まで継続的にrelease・改善 |
+| Code review | 7 | PRと必須checkを運用。branch protection policyは独立検証していない |
+| Fuzzing | 0 | Continuous fuzzingなし |
+| Signed releases | 0 | GPG/Sigstore署名なし |
 
 ---
 
 ## 3. ISO/IEC 25010
 
-| 品質特性 | スコア | 主な強み | 主なギャップ |
-|---|---|---|---|
-| 機能適合性 | 9/10 | 56 API, 15 ポーラー, MCP サーバー, 手動脅威調査, CSV/JSON エクスポート, モバイルビュー | OpenAPI 定義なし |
-| 性能効率性 | 9/10 | 多層キャッシュ (history-cache, enrichment 30日 TTL), WAL, 圧縮, バッチ化, 重複排除, bounded summaries, バックグラウンドスロットリング | 負荷テストなし |
-| 互換性 | 8/10 | Node 22/24, JA/EN i18n, OS 非依存, Linux conntrack 対応, モバイルレスポンシブ | Docker なし |
-| 使用性 | 9/10 | Demo モード, .env.example, 自動パスワード生成, MCP 統合, API/アーキテクチャドキュメント, モバイル対応 | ワンクリックデプロイなし |
-| 信頼性 | 9/10 | Graceful shutdown, 自動バックアップ, WAL checkpoint, reopen(), DB マイグレーション v5, AbortSignal, stale enrichment リフレッシュ | Health-check なし |
-| セキュリティ | 9/10 | OWASP ASVS L1 適合 (13/14), innerHTML 監査, zod 段階展開 | CSRF 明示なし |
-| 保守性 | 9/10 | 69 モジュール, テスト比率 93.7%, 分割リファクタ (history, auth), http-validation ヘルパー | TypeScript なし |
-| 移植性 | 7/10 | Pure Node.js, ENV 設定, OS 非依存 | Docker/systemd なし |
+| 品質特性 | Score | 強み | 残るgap |
+|---|---:|---|---|
+| 機能適合性 | 9 | 複数router、AI洞察、脅威調査、export、MCP | OpenAPIなし |
+| 性能効率性 | 9 | WAL、batch、bounded summary、cache、backup worker | 重いbackup検証中はhost-levelの短い遅延が残り得る |
+| 互換性 | 8 | Node 22/24、JA/EN、Yamaha/Cisco/ASUS/conntrack | CIのhardware確認はfixture中心 |
+| 使用性 | 9 | Responsive UI、setup guide、自動検出、health診断 | One-click deployなし |
+| 信頼性 | 9 | migration/restore/config/notes fail-closed、health、cancel、request ID | 組み込みservice supervisorなし |
+| Security | 9 | strict schema、CSP、secret管理、ASH、provider上限 | Internet境界防御は条件付き |
+| 保守性 | 9 | 85 module、強いtest、route/poller/query分離 | 600-760行のorchestration moduleが残る |
+| 移植性 | 7 | Pure Node runtime、環境設定 | 正式OCI image/systemd unitなし |
+
+**平均: 8.6/10。**
 
 ---
 
-## 4. Node.js Best Practices (goldbergyoni)
+## 4. Node.js Best Practices
 
-**準拠率: 44/50 主要プラクティス (88%)**
+**準拠率: 45/50（90%）。**
 
-| セクション | スコア | ハイライト |
-|---|---|---|
-| 1. プロジェクト構造 | 9/10 | ドメイン分割 (routes/pollers/core), レイヤー分離, 13 ルートファイル, history 分割リファクタ |
-| 2. エラー処理 | 9/10 | async/await 統一, 中央エラーハンドラ, graceful exit (SIGTERM/SIGINT), AbortSignal |
-| 3. コードスタイル | 10/10 | ESLint v10, const 優先 (var ゼロ), innerHTML 監査, 命名規約一貫 |
-| 4. テスト | 9/10 | 84 unit + 4 integration + Playwright smoke, AAA パターン, 分離初期化, 93.7% テスト比率 |
-| 5. プロダクション | 7/10 | 構造化ログ, 脆弱性自動検出, LTS Node, GitHub Pages ドキュメント |
-| 6. セキュリティ | 9/10 | ASH, security headers, eval ゼロ, auth rate limit, zod (HTTP + MCP) |
+- Domain、route、poller adapter、DB bootstrap、browser renderingの責務を分離しています。
+- 外部async処理にtimeout/AbortSignal上限があり、backup pruneはworkerとsingle-flight jobで隔離されています。
+- Loggerは`AsyncLocalStorage`で安全な`X-Request-Id`を付け、query stringは記録しません。
+- Graceful shutdown、readiness、schema migration、config rollback、永続化失敗をtestしています。
+- ESLint、V8 coverage、Node 22/24、Playwright、ASH、secret scan、dependency auditをPR gateにしています。
 
-**未対応の主要プラクティス:**
-- コードカバレッジ計測ツール (c8/nyc) なし
-- Health-check エンドポイントなし
-- リクエスト/トランザクション ID なし
-- Docker / プロセスマネージャなし
-- OpenAPI ドキュメントなし (API リファレンスは Markdown で提供)
-- グローバル HTTP レート制限なし (認証レート制限のみ)
+Default hardware integration CI、process manager/container成果物、OpenAPI、Internet向けglobal edge rate limitがないため満点とはしません。
 
 ---
 
-## 5. SonarQube 等価メトリクス
+## 5. SonarQube相当Quality Gate
 
-| メトリクス | 値 | レーティング |
-|---|---|---|
-| コード行数 | 20,255 | - |
-| テスト対ソース比率 | 93.7% | Excellent (>80%) |
-| 重複率 | < 2% | **A** (閾値: <=3%) |
-| 認知的複雑度 | 非常に低い | **A** (深いネスト: 7行のみ) |
-| 技術的負債比率 | 3.5% (~20h) | **A** (閾値: <=5%) |
-| 信頼性 | 既知バグ 0 | **A** |
-| セキュリティホットスポット | 0 | **A** |
-| セキュリティレーティング | - | **A** |
-| 保守性 | 負債比率 3.5% | **A** |
-| カバレッジ (推定) | ~70-80% | **B** (計測ツールなし) |
+| Metric | 結果 | Rating |
+|---|---:|---|
+| Reliability | Critical/Highの既知不具合なし。中のメモ保存問題は修正済み | A |
+| Security | 高確度secret・dependency findingなし | A |
+| Maintainability | 大きなmoduleはあるがtestと抽出済みhelperで境界化 | A |
+| Coverage | line 79.36% / branch 79.40% / function 75.94% | B |
+| Duplication | 手動・静的reviewで重大な新規重複なし | A（推定） |
 
-**Quality Gate: ✅ PASSED**
+**Quality gate: 合格。**
 
-### 複雑度ホットスポット (上位 5)
+### 主な保守性hotspot
 
-| ファイル | 行数 | 判断密度/100行 |
-|---|---|---|
-| device-identify.js | 547 | 25.2 |
-| routes/connections.js | 329 | 25.5 |
-| db-migrate.js | 353 | 19.3 |
-| pollers/cisco.js | 643 | 17.0 |
-| enrichment.js | 479 | 16.9 |
+| File | 行数 | 評価 |
+|---|---:|---|
+| `src/history.js` | 761 | query/cache/bootstrap抽出後もstore orchestrationが大きい |
+| `public/js/log.js` | 715 | pagination、filter、renderが同居 |
+| `public/js/graph.js` | 675 | 抽出済みhelper/panel/rendererのorchestration |
+| `src/devices.js` | 665 | device identity、persistence、merge lifecycle |
+| `src/pollers/cisco.js` | 645 | parser/handshake抽出後のstateful SSH lifecycle |
+| `server.js` | 632 | bootstrapとdependency wiring |
+| `src/pollers/yamaha.js` | 614 | adapter parser周辺のstateful SSH lifecycle |
 
-### コードスメル (合計 12 件)
-
-| 重要度 | 件数 | 例 |
-|---|---|---|
-| MAJOR | 2 | `history.js` 718行 (分割後も多責務), `devices.js` 656行 |
-| MINOR | 4 | `pollers/cisco.js` 643行, `pollers/yamaha.js` 598行, `device-identify.js` 547行, `server.js` 609行 |
-| INFO | 6 | マジックナンバー `8000`ms x10箇所, DB initDb() ボイラープレート重複 (5ファイル) |
+いずれも将来の段階的refactor候補で、現在のrelease blockerではありません。変更はbehaviorを維持し、小さなPRで行うべきです。
 
 ---
 
-## 6. バージョン別改善サマリー
+## 結論
 
-### v1.3.5 → v1.4.0
-
-| 領域 | 改善内容 |
-|---|---|
-| 性能 | enrichment キャッシュ TTL 最適化 (RDAP/Geo 30日), バックグラウンドスロットリング, bounded ライブグラフ詳細 |
-| 信頼性 | stale enrichment 一括リフレッシュ (起動時 API 負荷削減), private IP 永久キャッシュ |
-| UX | レスポンシブモバイルビュー追加, bounded ライブグラフ詳細表示 |
-| リリース管理 | v1.4.0 CHANGELOG, site/ 更新 |
-
-### v1.2.2 → v1.4.0 (累積)
-
-| 領域 | 改善内容 |
-|---|---|
-| テスト | ユニットテスト +30 ファイル (54→84), インテグレーション +1, テスト比率 74.9%→93.7% |
-| セキュリティ | zod スキーマ検証を HTTP ルートに段階展開 (5/13), `http-validation.js` ヘルパー, requireAdmin +17 |
-| アーキテクチャ | `history.js` 分割 (history-queries.js), `auth.js` 分割 (auth-sessions + router-setup), AbortSignal 対応 |
-| 機能 | conntrack ポーラー, 手動脅威調査, CSV/JSON エクスポート, history-cache, schema v5 migration, モバイルビュー |
-| 性能 | enrichment TTL 最適化, バックグラウンドスロットリング, bounded summaries/graph |
-| CI/CD | GitHub Pages ワークフロー追加 (SHA pinned) |
-| ドキュメント | API リファレンス (JA/EN), アーキテクチャ (JA/EN), conntrack/manual-threat セットアップ (JA/EN) |
-| 依存管理 | zod v4 追加, express v5 維持 |
-| コード品質 | `history.js` 985→718行 (-27%), MAJOR コードスメル 3→2件, パラメータ化 SQL 77→99 |
-
----
-
-*本レポートはリポジトリソースコードの自動静的解析により生成されました。動的テスト (ペネトレーションテスト, ファジング) は実施していません。SonarQube メトリクスは grep ベースの分析からの推定値であり、実際の SonarQube スキャナーによるものではありません。OpenSSF Scorecard はリポジトリ内容からの推定であり、正確なスコアは `scorecard` CLI をライブ GitHub リポジトリに対して実行する必要があります。*
+現在のmainは、文書化されたself-hosted/private network運用に適した品質です。自動gateは広く、data変更処理はfail-closedで、本レビュー後にCritical/Highの既知問題は残っていません。次の費用対効果が高い作業はP2-8第二段階の実利用判断です。OpenAPI、Internet境界強化、conntrack実機拡大、OCI配布は需要に応じて着手します。

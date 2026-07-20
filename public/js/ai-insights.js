@@ -46,6 +46,82 @@ function formatNumber(value) {
   return new Intl.NumberFormat().format(Number(value) || 0);
 }
 
+function formatUsd(value) {
+  const amount = Number(value) || 0;
+  const fractionDigits = amount > 0 && amount < 0.01 ? 4 : 2;
+  return new Intl.NumberFormat(currentLang === 'en' ? 'en-US' : 'ja-JP', {
+    style: 'currency',
+    currency: 'USD',
+    currencyDisplay: currentLang === 'en' ? 'narrowSymbol' : 'code',
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(amount);
+}
+
+function renderUsagePeriod(name, data) {
+  document.getElementById(`ai-usage-${name}-tokens`).textContent = tVars('ai.usage.tokens', {
+    tokens: formatNumber(data.totalTokens),
+  });
+  document.getElementById(`ai-usage-${name}-detail`).textContent = tVars('ai.usage.detail', {
+    input: formatNumber(data.inputTokens),
+    output: formatNumber(data.outputTokens),
+  });
+  const isPartial = Number(data.unpricedTokens) > 0;
+  document.getElementById(`ai-usage-${name}-cost`).textContent = tVars(
+    isPartial ? 'ai.usage.costPartial' : 'ai.usage.cost', {
+    cost: formatUsd(data.estimatedCostUsd),
+  });
+  document.getElementById(`ai-usage-${name}-unpriced`).textContent = isPartial
+    ? tVars('ai.usage.unpricedDetail', {
+      tokens: formatNumber(data.unpricedTokens),
+      requests: formatNumber(data.unknownPriceRequests),
+    })
+    : '';
+  document.getElementById(`ai-usage-${name}-requests`).textContent = tVars('ai.usage.requests', {
+    requests: formatNumber(data.requests),
+  });
+}
+
+function renderAiUsage(data) {
+  renderUsagePeriod('current', data.current);
+  renderUsagePeriod('previous', data.previous);
+  const periods = [data.current, data.previous];
+  const messages = [];
+  if (periods.some(period => Number(period.unknownPriceRequests) > 0)) messages.push(t('ai.usage.unpriced'));
+  const unpricedModels = [...new Set(periods.flatMap(period => period.unpricedModels || [])
+    .map(row => `${row.provider}/${row.model || t('ai.chat.unknownModel')}`))];
+  if (unpricedModels.length) {
+    const shown = unpricedModels.slice(0, 5);
+    const remaining = unpricedModels.length - shown.length;
+    messages.push(tVars('ai.usage.unpricedModels', {
+      models: shown.join(', '),
+      remaining: remaining ? ` +${remaining}` : '',
+    }));
+  }
+  if (periods.some(period => Number(period.usageMissingRequests) > 0)) messages.push(t('ai.usage.missing'));
+  if (data.pricing?.catalogVersion) {
+    messages.push(tVars('ai.usage.catalog', {
+      version: data.pricing.catalogVersion,
+      effective: data.pricing.effectiveFrom || data.pricing.catalogVersion,
+    }));
+  }
+  document.getElementById('ai-usage-caveat').textContent = messages.join(' ');
+}
+
+async function refreshAiUsage() {
+  try {
+    const params = new URLSearchParams({ timezoneOffset: String(new Date().getTimezoneOffset()) });
+    const response = await apiFetch(`${_BASE}/api/ai/usage/monthly?${params}`);
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || t('ai.usage.error'));
+    renderAiUsage(body);
+    return true;
+  } catch {
+    document.getElementById('ai-usage-caveat').textContent = t('ai.usage.error');
+    return false;
+  }
+}
+
 function deltaSummary(current, previous) {
   const delta = current - previous;
   if (previous === 0) return { delta, percent: null };
@@ -113,6 +189,7 @@ async function refreshAiInsights() {
     const data = await response.json();
     if (requestGeneration !== generation) return;
     renderFacts(data);
+    await refreshAiUsage();
   } catch (cause) {
     if (requestGeneration !== generation) return;
     error.textContent = cause.message || t('ai.error');
@@ -130,7 +207,34 @@ function renderChatMessages(messages) {
   container.replaceChildren(...messages.map(message => {
     const item = document.createElement('div');
     item.className = `ai-chat-message is-${message.role}${message.status === 'failed' ? ' is-failed' : ''}`;
-    item.textContent = message.status === 'failed' ? t('ai.chat.failed') : (message.body || '');
+    const body = document.createElement('div');
+    body.className = 'ai-chat-message-body';
+    body.textContent = message.status === 'failed' ? t('ai.chat.failed') : (message.body || '');
+    if (message.role !== 'assistant') {
+      item.replaceChildren(body);
+      return item;
+    }
+    const meta = document.createElement('div');
+    meta.className = 'ai-chat-message-meta';
+    const provider = PROVIDER_LABELS[message.provider] || message.provider || t('ai.chat.unknownProvider');
+    const model = message.model || t('ai.chat.unknownModel');
+    const identity = tVars('ai.chat.responseMeta', { provider, model });
+    if (message.usageTotalTokens == null || (
+      Number(message.usageTotalTokens) === 0
+      && Number(message.usageInputTokens) === 0
+      && Number(message.usageOutputTokens) === 0
+    )) {
+      meta.textContent = `${identity} · ${t('ai.chat.usageUnavailable')}`;
+    } else {
+      const usage = message.estimatedCostUsd == null
+        ? tVars('ai.chat.usageUnpriced', { tokens: formatNumber(message.usageTotalTokens) })
+        : tVars('ai.chat.usagePriced', {
+          tokens: formatNumber(message.usageTotalTokens),
+          cost: formatUsd(message.estimatedCostUsd),
+        });
+      meta.textContent = `${identity} · ${usage}`;
+    }
+    item.replaceChildren(body, meta);
     return item;
   }));
   container.scrollTop = container.scrollHeight;
@@ -148,6 +252,16 @@ function renderPendingExchange(userText) {
   pending.textContent = t('ai.chat.thinking');
   container.append(user, pending);
   container.scrollTop = container.scrollHeight;
+}
+
+function markPendingExchangeFailed() {
+  const container = document.getElementById('ai-chat-messages');
+  const pending = [...container.children].reverse()
+    .find(element => element.classList.contains('is-pending'));
+  if (!pending) return;
+  pending.classList.remove('is-pending');
+  pending.classList.add('is-failed');
+  pending.textContent = t('ai.chat.failed');
 }
 
 async function loadConversation(conversationId) {
@@ -203,6 +317,7 @@ async function sendChatMessage() {
   renderPendingExchange(message);
   const error = document.getElementById('ai-error');
   error.classList.remove('is-visible');
+  let persistedByServer = false;
   try {
     const response = await apiFetch(`${_BASE}/api/ai/chat`, {
       method: 'POST',
@@ -223,15 +338,35 @@ async function sendChatMessage() {
       signal: chatController.signal,
     });
     const body = await response.json().catch(() => ({}));
+    // The server persists the user message before invoking the provider and
+    // returns its conversationId even when inference fails. Keep that ID so an
+    // error response reloads the durable question instead of clearing it.
+    if (body.conversationId) {
+      activeConversationId = body.conversationId;
+      persistedByServer = true;
+    }
     if (!response.ok) throw new Error(body.error || t('ai.chat.failed'));
-    activeConversationId = body.conversationId;
     await loadConversations();
+    await refreshAiUsage();
   } catch (cause) {
     error.textContent = cause.message || t('ai.chat.failed');
     error.classList.add('is-visible');
-    // Drop the optimistic bubbles: restore the real conversation, or clear.
-    if (activeConversationId) await loadConversation(activeConversationId).catch(() => {});
-    else renderChatMessages([]);
+    if (persistedByServer) {
+      // Show the append-only user/failed-assistant records written by the
+      // server. If that reload also fails, keep the optimistic question visible
+      // and replace only the thinking indicator with a failed state.
+      try {
+        await loadConversations();
+      } catch {
+        markPendingExchangeFailed();
+      }
+    } else {
+      // The request did not reach a persistence boundary. Restore the previous
+      // conversation and put the question back so the user can retry it.
+      if (activeConversationId) await loadConversation(activeConversationId).catch(() => {});
+      else renderChatMessages([]);
+      input.value = message;
+    }
   } finally {
     chatController = null;
     button.disabled = false;
@@ -276,6 +411,7 @@ async function analyzeCurrentRange() {
       model: body.model,
       time: new Date(body.generatedAt).toLocaleString(),
     });
+    await refreshAiUsage();
   } catch (cause) {
     if (cause.name === 'AbortError') result.textContent = t('ai.analysis.cancelled');
     else {
@@ -345,4 +481,4 @@ function initAiInsights() {
 
 initAiInsights();
 
-export { analyzeCurrentRange, deltaSummary, loadConversations, renderChatMessages, renderFacts, refreshAiInsights, sendChatMessage, setAnalysisRunning, startAiInsights, stopAiInsights };
+export { analyzeCurrentRange, deltaSummary, loadConversations, renderAiUsage, renderChatMessages, renderFacts, refreshAiInsights, refreshAiUsage, sendChatMessage, setAnalysisRunning, startAiInsights, stopAiInsights };

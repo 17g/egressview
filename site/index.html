@@ -12,11 +12,11 @@
   <meta property="og:description" content="Passively monitor every LAN device's outbound connections. Graph Map and Statistics provide the overview; Connection Log and Devices provide drill-down investigation. Automatic C2/botnet threat detection and Slack alerts — no new hardware required.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://yo1t.github.io/egressview/">
-  <meta property="og:image" content="https://raw.githubusercontent.com/yo1t/egressview/main/docs/assets/egressview-graph-map.png">
+  <meta property="og:image" content="https://raw.githubusercontent.com/yo1t/egressview/main/docs/assets/egressview-ai-insights-en.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="EgressView — Home / SOHO Network Security Monitor">
   <meta name="twitter:description" content="Passively monitor every LAN device's outbound connections. Graph Map and Statistics provide the overview; Connection Log and Devices provide drill-down investigation. Automatic C2/botnet threat detection and Slack alerts — no new hardware required.">
-  <meta name="twitter:image" content="https://raw.githubusercontent.com/yo1t/egressview/main/docs/assets/egressview-graph-map.png">
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/yo1t/egressview/main/docs/assets/egressview-ai-insights-en.png">
   <style>
     :root {
       --bg: #0d1117;
@@ -202,7 +202,7 @@
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
       Source Code
     </a>
-    <a class="btn release" href="https://github.com/yo1t/egressview/releases/tag/v1.4.0">v1.4.0 Release</a>
+    <a class="btn release" href="https://github.com/yo1t/egressview/releases/tag/v1.5.0">v1.5.0 Release</a>
     <a class="btn" href="https://github.com/yo1t/egressview/issues">
       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 9.5a1.5 1.5 0 100-3 1.5 1.5 0 000 3z"/><path fill-rule="evenodd" d="M8 0a8 8 0 100 16A8 8 0 008 0zM1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0z"/></svg>
       Issues
@@ -217,8 +217,8 @@
 <main>
 
   <section id="release">
-    <h2><span class="icon">◆</span> v1.4.0</h2>
-    <p style="font-size:0.95rem; color:var(--muted);">Mobile monitoring, CSV/JSON connection export, explicit manual threat investigation, and a Docker-validated Linux conntrack preview. The release also completes the fail-closed schema v5 migration and hardens frontend rendering, database restore, and configuration persistence. <a href="https://github.com/yo1t/egressview/releases/tag/v1.4.0">Read the release notes →</a></p>
+    <h2><span class="icon">◆</span> v1.5.0</h2>
+    <p style="font-size:0.95rem; color:var(--muted);">AI Insights is now the start page, with explicit analysis and chat through Ollama, Anthropic, OpenAI, or Amazon Bedrock, append-only history, monthly token/cost estimates, and Bedrock model, inference-profile, and Guardrail discovery. The release also adds schema v7 and collection-path performance improvements. <a href="https://github.com/yo1t/egressview/releases/tag/v1.5.0">Read the release notes →</a></p>
   </section>
 
   <!-- Why EgressView -->
@@ -310,6 +310,10 @@
         <p>Persistent history of all threat detections and new-device alerts. Per-column filter, sort, and click-to-detail popup. Logged regardless of Slack configuration — always available for review.</p>
       </div>
       <div class="card">
+        <h3>✦ AI Insights Start Page</h3>
+        <p>Opens with collection health, connections, devices, destinations, threats, and previous-period comparisons. Local statistics work without AI; only explicit actions send data to Ollama, Anthropic, OpenAI, or Amazon Bedrock for analysis/chat. Shows monthly tokens/estimated cost and the model/cost for each answer. <a href="https://github.com/yo1t/egressview/blob/main/docs/setup-ai-insights.md">Setup guide →</a></p>
+      </div>
+      <div class="card">
         <h3>🤖 AI Agent Access (MCP)</h3>
         <p>Built-in <a href="https://modelcontextprotocol.io/">Model Context Protocol</a> server exposes 11 tools — traffic summary, threat connections, top destinations, device list, device notes, and more — to AI assistants such as AWS Kiro, Anthropic Claude, and Anysphere Cursor. Supports stdio and HTTP transport. <a href="https://github.com/yo1t/egressview/blob/main/docs/setup-mcp.md">Setup guide →</a></p>
       </div>
@@ -334,6 +338,7 @@
   <section id="screenshots">
     <h2><span class="icon">◈</span> Screenshots</h2>
     <div class="screenshot-grid">
+      <img src="docs/assets/egressview-ai-insights-en.png" alt="EgressView AI Insights overview with live network posture and generated guidance" loading="lazy">
       <img src="docs/assets/egressview-graph-map.png" alt="EgressView Graph Map overview for LAN devices and destinations" loading="lazy">
       <img src="docs/assets/egressview-statistics.png" alt="EgressView Statistics view with connection history charts" loading="lazy">
       <img src="docs/assets/egressview-connection-log.png" alt="EgressView Connection Log drill-down workflow" loading="lazy">

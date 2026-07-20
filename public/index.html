@@ -515,10 +515,12 @@
               <div id="ai-guardrail-fields" class="is-hidden">
                 <div class="form-group">
                   <label class="form-label" for="s-ai-guardrail-id" data-i18n="settings.ai.guardrailId">Guardrail ID / ARN</label>
+                  <select id="s-ai-guardrail-select" class="form-input is-hidden"></select>
                   <input id="s-ai-guardrail-id" class="form-input" type="text" maxlength="2048" autocomplete="off" spellcheck="false">
                 </div>
                 <div class="form-group">
                   <label class="form-label" for="s-ai-guardrail-version" data-i18n="settings.ai.guardrailVersion">Guardrail バージョン</label>
+                  <select id="s-ai-guardrail-version-select" class="form-input is-hidden"></select>
                   <input id="s-ai-guardrail-version" class="form-input" type="text" maxlength="64" placeholder="DRAFT" autocomplete="off" spellcheck="false">
                 </div>
                 <p class="settings-field-hint ai-guardrail-warning" data-i18n="settings.ai.guardrailResidency">⚠ Guardrails は日本内処理を保証しません。日本限定（jp.）の guardrail profile は存在せず、cross-region guardrail は APAC 全域（日本外を含む）へルーティングされ得ます。日本内データレジデンシーが必須の場合は Guardrails をオフにするか、呼び出しリージョン内の single-region guardrail を使ってください。分類フラグ付きの入出力は最大30日保持され得ます。</p>
@@ -538,6 +540,7 @@
               <input id="s-ai-model" class="form-input" type="text" list="ai-model-options" maxlength="200" autocomplete="off" spellcheck="false">
               <datalist id="ai-model-options"></datalist>
               <p class="settings-field-hint" data-i18n="settings.ai.modelHint">「接続確認」でモデル一覧を取得すると下のプルダウンから選べます。ARN や未取得モデルは直接入力できます。</p>
+              <p id="ai-model-pricing-status" class="settings-field-hint ai-model-pricing-status"></p>
             </div>
           </div>
           <div class="ai-settings-actions">
@@ -564,6 +567,7 @@
           <div class="form-group settings-form-top-8">
             <label class="form-label" data-i18n="settings.backup.generations">保持世代数</label>
             <select id="s-backup-generations" class="form-input">
+              <option value="2" data-i18n="settings.backup.gen2">2世代</option>
               <option value="3" data-i18n="settings.backup.gen3">3世代</option>
               <option value="5" data-i18n="settings.backup.gen5">5世代</option>
               <option value="7" selected data-i18n="settings.backup.gen7">7世代</option>
@@ -571,9 +575,27 @@
               <option value="14" data-i18n="settings.backup.gen14">14世代</option>
             </select>
           </div>
+          <div class="form-group settings-form-top-8">
+            <label class="form-label" data-i18n="settings.backup.storageLimit">バックアップ最大使用量</label>
+            <select id="s-backup-max-bytes" class="form-input">
+              <option value="0" selected data-i18n="settings.backup.storageUnlimited">制限なし（警告のみ）</option>
+              <option value="4294967296">4 GiB</option>
+              <option value="8589934592">8 GiB</option>
+              <option value="17179869184">16 GiB</option>
+            </select>
+          </div>
+          <label class="settings-check-label settings-form-top-8">
+            <input id="s-backup-auto-prune" type="checkbox">
+            <span data-i18n="settings.backup.autoPrune">検証済みの安全な候補だけを自動削除</span>
+          </label>
+          <p class="settings-field-hint" data-i18n="settings.backup.retentionSafety">通常バックアップ2世代と最新のmigrationバックアップ1世代は常に保護されます。</p>
           <button class="connect-btn settings-form-top-12" id="backup-config-save" data-i18n="settings.btn.save">保存</button>
           <div class="settings-status" id="backup-config-status"></div>
           <div class="backup-list-section">
+            <label class="form-label" data-i18n="settings.backup.capacity">容量診断</label>
+            <div id="backup-capacity-status" class="settings-status backup-capacity-status"></div>
+            <button class="connect-btn" id="backup-prune-btn" data-i18n="settings.backup.cleanup">安全な削除候補を確認</button>
+            <div class="settings-status" id="backup-prune-status"></div>
             <label class="form-label" data-i18n="settings.backup.list">バックアップ一覧</label>
             <div id="backup-list" class="backup-list"></div>
             <div class="backup-actions">
@@ -662,12 +684,12 @@
   <h1>EgressView</h1>
   <div id="demo-banner" class="demo-banner">DEMO</div>
   <div class="view-tabs">
-    <button class="view-tab active" id="btn-graph" data-i18n="tab.graph">📊 グラフマップ</button>
+    <button class="view-tab active" id="btn-ai" data-i18n="tab.ai">✦ AI洞察</button>
+    <button class="view-tab" id="btn-graph" data-i18n="tab.graph">📊 グラフマップ</button>
     <button class="view-tab" id="btn-stats" data-i18n="tab.stats">📈 統計情報</button>
     <button class="view-tab" id="btn-log" data-i18n="tab.log">📋 通信ログ</button>
     <button class="view-tab" id="btn-devices" data-i18n="tab.devices">🖥 端末一覧</button>
     <button class="view-tab" id="btn-notif-log" data-i18n="tab.notif-log">🔔 検出ログ</button>
-    <button class="view-tab" id="btn-ai" data-i18n="tab.ai">✦ AI洞察</button>
   </div>
   <div class="time-filter">
     <span class="time-filter-label" data-i18n="period">期間</span>
@@ -771,7 +793,7 @@
     </div>
   </div>
   <!-- AI Insights View -->
-  <div id="ai-container" class="activity-view ai-view">
+  <div id="ai-container" class="activity-view ai-view view-active">
     <div class="ai-hero">
       <div>
         <div class="ai-eyebrow" data-i18n="ai.eyebrow">LIVE NETWORK POSTURE</div>
@@ -819,7 +841,7 @@
       <div class="ai-placeholder-mark">✦</div>
       <div class="ai-analysis-body">
         <h3 data-i18n="ai.analysis.title">生成AIによる洞察</h3>
-        <p id="ai-analysis-privacy" data-i18n="ai.analysis.privacy">内部IP・MAC・端末名を除いた集計だけを、設定済みのOllamaへ送ります。</p>
+        <p id="ai-analysis-privacy" data-i18n="ai.analysis.privacy">通信先IP・ホスト名・端末名・MAC・vendor・端末一覧・ネットワークノード要約を設定済みのAIプロバイダーへ送信します。認証情報、端末メモ、生ログ、管理IPは送信しません。</p>
         <div class="ai-analysis-actions">
           <button id="ai-analyze-btn" class="ai-refresh" type="button" data-i18n="ai.analysis.run">現在の期間を分析</button>
           <button id="ai-cancel-btn" class="ai-analysis-cancel is-hidden" type="button" data-i18n="ai.analysis.cancel">中断</button>
@@ -846,6 +868,38 @@
         <button id="ai-chat-send-btn" class="ai-refresh" type="button" data-i18n="ai.chat.send">質問する</button>
       </div>
       <div id="ai-chat-storage" class="ai-analysis-meta"></div>
+    </section>
+    <section class="ai-usage-summary" aria-labelledby="ai-usage-title">
+      <div class="ai-usage-head">
+        <div>
+          <h3 id="ai-usage-title" data-i18n="ai.usage.title">AI使用量</h3>
+          <p data-i18n="ai.usage.note">この機能の記録開始後に、成功したAI呼び出しでproviderが返した実測トークンです。料金は概算で、Guardrailsなどの追加料金を含みません。</p>
+        </div>
+        <span class="ai-usage-currency">USD</span>
+      </div>
+      <div class="ai-usage-grid">
+        <article class="ai-usage-card">
+          <span class="ai-usage-period" data-i18n="ai.usage.current">今月</span>
+          <strong id="ai-usage-current-tokens">—</strong>
+          <span id="ai-usage-current-detail" class="ai-usage-detail">—</span>
+          <span id="ai-usage-current-unpriced" class="ai-usage-unpriced"></span>
+          <div class="ai-usage-foot">
+            <span id="ai-usage-current-cost">—</span>
+            <span id="ai-usage-current-requests">—</span>
+          </div>
+        </article>
+        <article class="ai-usage-card">
+          <span class="ai-usage-period" data-i18n="ai.usage.previous">先月</span>
+          <strong id="ai-usage-previous-tokens">—</strong>
+          <span id="ai-usage-previous-detail" class="ai-usage-detail">—</span>
+          <span id="ai-usage-previous-unpriced" class="ai-usage-unpriced"></span>
+          <div class="ai-usage-foot">
+            <span id="ai-usage-previous-cost">—</span>
+            <span id="ai-usage-previous-requests">—</span>
+          </div>
+        </article>
+      </div>
+      <p id="ai-usage-caveat" class="ai-usage-caveat"></p>
     </section>
   </div>
   <!-- Connection Log View -->
@@ -1055,7 +1109,7 @@
     </div>
   </div>
 
-  <div id="graph-container" class="view-active">
+  <div id="graph-container">
     <svg id="graph"></svg>
     <div class="graph-tooltip" id="tooltip"></div>
     <div class="zoom-controls">

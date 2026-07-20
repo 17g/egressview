@@ -14,8 +14,12 @@ const UPLOAD_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 const backupNameSchema = z.object({ name: z.string().min(1).max(255) }).strict();
 const backupConfigSchema = z.object({
   intervalHours: z.coerce.number().int().positive().optional(),
-  maxGenerations: z.coerce.number().int().positive().optional(),
+  maxGenerations: z.coerce.number().int().min(2).optional(),
+  maxBackupBytes: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  autoPrune: z.boolean().optional(),
 }).strict();
+const backupPruneSchema = z.object({ execute: z.boolean().default(false) }).strict();
+const backupPruneJobSchema = z.object({ jobId: z.string().uuid() }).strict();
 
 /**
  * @param {{
@@ -49,7 +53,17 @@ module.exports = function backupRoutes(ctx) {
   }
 
   router.get('/backup/list', requireAdmin, (req, res) => {
-    res.json({ backups: backup.listBackups(), config: backup.getConfig() });
+    try {
+      res.json({
+        backups: backup.listBackups(),
+        config: backup.getConfig(),
+        diagnostics: backup.inventory(),
+        pruneJob: backup.getActivePruneJob?.() || null,
+      });
+    } catch (error) {
+      logger.error('[backup] inventory error:', error.message);
+      res.status(500).json({ error: 'Backup diagnostics failed. Check server logs.' });
+    }
   });
 
   router.post('/backup/create', requireAdmin, async (req, res) => {
@@ -132,7 +146,7 @@ module.exports = function backupRoutes(ctx) {
   router.post('/backup/config', requireAdmin, (req, res) => {
     const parsed = parseRequest(backupConfigSchema, req.body, res);
     if (!parsed.ok) return;
-    const { intervalHours, maxGenerations } = parsed.data;
+    const { intervalHours, maxGenerations, maxBackupBytes, autoPrune } = parsed.data;
     const previous = backup.getConfig();
     const updates = {};
     if (intervalHours != null) {
@@ -140,6 +154,12 @@ module.exports = function backupRoutes(ctx) {
     }
     if (maxGenerations != null) {
       updates.maxGenerations = maxGenerations;
+    }
+    if (maxBackupBytes != null) {
+      updates.maxBackupBytes = maxBackupBytes;
+    }
+    if (autoPrune != null) {
+      updates.autoPrune = autoPrune;
     }
     backup.configure(updates);
     backup.stopPeriodicBackup();
@@ -154,6 +174,41 @@ module.exports = function backupRoutes(ctx) {
       return res.status(500).json({ error: 'Backup settings were not saved. Check server logs.' });
     }
     res.json({ success: true, config: backup.getConfig() });
+  });
+
+  router.post('/backup/prune', requireAdmin, (req, res) => {
+    const parsed = parseRequest(backupPruneSchema, req.body, res);
+    if (!parsed.ok) return;
+    try {
+      const job = backup.startPruneJob({ execute: parsed.data.execute, source: 'manual' });
+      res.status(202).json({ success: true, job });
+    } catch (error) {
+      if (error.code === 'BACKUP_PRUNE_BUSY') {
+        return res.status(409).json({ error: 'A backup cleanup job is already running.', job: error.job });
+      }
+      logger.error('[backup] prune error:', error.message);
+      res.status(500).json({ error: 'Backup cleanup failed safely. No unverified backup was removed.' });
+    }
+  });
+
+  router.get('/backup/prune/:jobId', requireAdmin, (req, res) => {
+    const parsed = parseRequest(backupPruneJobSchema, req.params, res);
+    if (!parsed.ok) return;
+    const job = backup.getPruneJob(parsed.data.jobId);
+    if (!job) return res.status(404).json({ error: 'Backup cleanup job not found.' });
+    res.json({ success: true, job });
+  });
+
+  router.delete('/backup/prune/:jobId', requireAdmin, (req, res) => {
+    const parsed = parseRequest(backupPruneJobSchema, req.params, res);
+    if (!parsed.ok) return;
+    const job = backup.getPruneJob(parsed.data.jobId);
+    if (!job) return res.status(404).json({ error: 'Backup cleanup job not found.' });
+    if (job.status !== 'running') {
+      return res.status(409).json({ error: 'Backup cleanup job is no longer running.', job });
+    }
+    backup.cancelPruneJob(parsed.data.jobId);
+    res.json({ success: true, job: backup.getPruneJob(parsed.data.jobId) });
   });
 
   return router;

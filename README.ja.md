@@ -8,7 +8,7 @@
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 ![Node](https://img.shields.io/badge/node-%3E%3D22-green)
-![Release](https://img.shields.io/badge/release-v1.4.0-3fb950)
+![Release](https://img.shields.io/badge/release-v1.5.0-3fb950)
 
 > 🇬🇧 [English README](README.md) | 🌐 [プロジェクトページ](https://yo1t.github.io/egressview/index.ja.html)
 
@@ -18,11 +18,11 @@
 
 EgressView は Yamaha RTX / Cisco IOS を使う家庭・SOHOネットワーク向けに、実運用を意識して開発しています。ASUS AP 連携と任意のデータソースは補助的な連携としてメンテナンスしています。
 
-### v1.4.0の主な変更
+### v1.5.0の主な変更
 
-v1.4.0では、モバイル監視ビュー、絞り込んだ通信履歴のCSV/JSON出力、明示操作による手動脅威調査、Linux conntrackプレビューを追加しました。複数ルーター向けDB schema v5移行も完了し、HTML文字列による画面描画とCSPのinline style例外を廃止しました。DBリストアと設定保存もfail-closed方式に強化しています。詳細は[変更履歴](CHANGELOG.md)を参照してください。
+v1.5.0では、AI洞察をスタートページとして正式追加しました。ローカル指標、前期間比較、Ollama / Anthropic / OpenAI / Amazon Bedrockによる明示実行の分析・対話、append-only会話履歴、月次token使用量と概算料金を確認できます。Bedrockのmodel / inference profile / Guardrail自動検出、CPU負荷の計測と収集処理の最適化も追加しています。詳細は[変更履歴](CHANGELOG.md)を参照してください。
 
-既存DBは起動時に自動移行されます。schema v5適用前にバックアップの作成・検証と観測データの整合性確認を行い、いずれかが失敗した場合はDBを変更せず起動を停止します。Linux conntrackはDocker統合試験済みのプレビューで、実機ルーターでの検証は未完了です。
+既存DBは起動時にschema v7へ自動移行されます。適用前に完全バックアップを作成・検証し、空き容量、checkpoint、copy、integrity検査のいずれかが失敗した場合はDBを変更せず起動を停止します。Linux conntrackはDocker統合試験済みのプレビューで、実機ルーターでの検証は未完了です。
 
 ## 家庭・SOHOのセキュリティ対策として
 
@@ -36,6 +36,7 @@ EgressViewは、多くの家庭ユーザーが答えを持てていない問い�
 - **外部サービスによる手動脅威調査** — 明示操作時だけAbuseIPDB・VirusTotal・AlienVault OTXへ問い合わせ（cache/rate limit対応、[ガイド](docs/manual-threat-investigation.ja.md)）
 - **Linux conntrackプレビュー** — Linux系ルーターからSSH収集。Docker統合試験済み、実機確認は未完了（[設定](docs/setup-conntrack.ja.md)）
 - **モバイル監視ビュー** — VPN・プライベートネットワーク内のスマートフォンから、ルーター状態、グラフ、統計、通信ログ、端末一覧、検出ログを確認
+- **AI洞察スタートページ** — 起動直後に収集状態・接続・端末・宛先・脅威と前期間比較を表示。上限付き端末一覧とASUS node要約を使ってOllama / Anthropic / OpenAI / Amazon Bedrockで手動分析・対話でき、版管理料金表による月次token・概算料金、未価格modelがある場合の部分合計、回答ごとのモデル/料金も確認可能（[設定ガイド](docs/setup-ai-insights.ja.md)、[Bedrock本番設定](docs/setup-bedrock.ja.md)）
 - **即時Slackアラート** — 任意のデバイスが既知のC2サーバーやマルウェア配布元に接続した瞬間にDM通知
 - **ハードウェア変更不要** — Mac・PC・Raspberry Piにインストールするだけ。既存のYamaha RTX / Cisco IOSルーターと共存
 
@@ -53,11 +54,12 @@ EgressViewは、多くの家庭ユーザーが答えを持てていない問い�
 - **グラフマップ / 統計情報**で全体像を把握し、**通信ログ / 端末一覧**でセッション・端末単位にドリルダウン
 - オプションで**ASUS WiFi アクセスポイント**（APモード/AiMeshとして使用、ルーターとしてではない）に接続し、WiFiクライアント情報（帯域、信号強度、トラフィック量、AiMeshトポロジー）を取得
 - **接続履歴**を**SQLite**で永続保存（WALモード、クラッシュセーフ、最大2年保持可）
+- 通常・migrationバックアップを統合診断し、次回migrationの容量不足を事前警告。検証済み復元点を保護するdry-runクリーンアップに対応
 - **通信ログ**: ソート・検索可能なセッション一覧（脅威バッジ・詳細ポップアップ付き）。**アプリ列**でポート番号と宛先ホスト名からサービス名を自動推測（APNs・FCM・AirPlay・MQTT/TLS・QUIC・iCloud・YouTube・AWS・Slack・Zoom・Tuya Smart・Gaijin/DCS など）
 - **🔔 検出ログ** — 脅威検出・新規端末アラートの永続履歴。カラム別フィルター・ソート・クリック詳細ポップアップ付き。Slack設定の有無にかかわらず全検出を記録
 - **📡 データソースタブ** — dnsmasq・[INSPECT]・[DHCPD] の ON/OFF とパスを設定画面から個別に制御
 - **🤖 AI エージェント連携（MCP）** — [Model Context Protocol](https://modelcontextprotocol.io/) サーバーを内蔵し、11本のツール（通信サマリー・脅威接続・宛先ランキング・端末一覧・端末メモなど）を AWS Kiro・Anthropic Claude・Anysphere Cursor 等の AI アシスタントに公開。stdio / HTTP 両対応
-- グラフマップ、統計情報、通信ログ、端末一覧、検出ログ、設定を備えたダークテーマのシングルページUI
+- **✦ AI洞察**を先頭・スタートページにした、グラフマップ、統計情報、通信ログ、端末一覧、検出ログ、設定を備えるダークテーマのシングルページUI
 
 ## デモ
 
@@ -71,6 +73,7 @@ https://github.com/user-attachments/assets/9448d75b-a7fe-4363-8d35-da17abaed0ee
 
 ## スクリーンショット
 
+![AI洞察によるネットワークの現在地](docs/assets/egressview-ai-insights-ja.png)
 ![グラフマップによる全体把握](docs/assets/egressview-graph-map.png)
 ![統計情報ビュー](docs/assets/egressview-statistics.png)
 ![通信ログのドリルダウン](docs/assets/egressview-connection-log.png)
@@ -194,6 +197,7 @@ DEMO_MODE=true DEMO_ADMIN_TOKEN=my-token npm start
 | ✅ | Mac/PC/Raspberry Pi に Node.js 22以上をインストール | [nodejs.org](https://nodejs.org) |
 | ✅ | Yamaha RTX または Cisco IOS ルーターを1台以上SSH有効化 | [Yamaha設定 →](docs/setup-yamaha.ja.md) / [Cisco設定 →](docs/setup-cisco.ja.md) |
 | ☐ | （任意）ASUS WiFi AP の Web 管理画面を有効化 | [設定ガイド →](docs/setup-asus.ja.md) |
+| ☐ | （任意）画面内AI洞察（Ollama / Anthropic / OpenAI / Amazon Bedrock） | [設定ガイド →](docs/setup-ai-insights.ja.md) |
 | ☐ | （任意）AI アシスタント連携（AWS Kiro・Anthropic Claude・Anysphere Cursor 等） | [設定ガイド →](docs/setup-mcp.ja.md) |
 
 ### Step 2 — インストールと起動

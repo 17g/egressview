@@ -4,6 +4,71 @@ All notable changes to EgressView are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added request correlation for every HTTP response through `X-Request-Id`, with safe caller-provided IDs, generated UUID fallbacks, asynchronous logger context, and correlated slow/error logs.
+- Added unified inventory and capacity diagnostics for normal and pre-migration SQLite backups, including schema, integrity, disk headroom, and next-migration readiness.
+- Added dry-run and confirmed cleanup for verified backup generations, with optional explicit auto-prune and configurable storage limits.
+- Moved AI list prices into a validated, versioned data catalog with required effective dates and source URLs, so price updates no longer require pricing-logic changes.
+- Added separate diagnostics for unknown model prices and successful calls where the provider returned no token usage.
+- Added official GPT-5.5 standard API pricing so future token usage contributes to the estimated USD total instead of remaining explicitly unpriced.
+- Added pricing coverage for major OpenAI text-generation models, model-level coverage checks in AI settings, grouped unpriced-usage diagnostics, and explicit partial-total USD labels.
+- Added production Bedrock guidance for least-privilege IAM, invocation logging, PrivateLink, and standard versus adaptive AWS SDK retries.
+- Added unauthenticated, minimal `/healthz` liveness and `/readyz` bootstrap-readiness endpoints for monitoring and deployment gates.
+
+### Security and Reliability
+
+- Restored saved ASUS polling automatically after service restarts and coalesced overlapping polls to avoid duplicate token renewals and API request bursts.
+- Started a fresh append-only AI conversation automatically when the configured provider or model changes, preserving the previous conversation instead of rejecting the next question.
+- Preserved AI chat questions when provider generation fails after server-side persistence, and restored unsent questions to the input when a request fails before persistence.
+- Made every device-note write path fail closed: failed writes restore the previous runtime snapshot, suppress success notifications, and prevent dependent device merges from starting.
+- Replaced ambiguous 8-second literals with domain-owned timeout and input-limit constants while preserving existing values, abort behavior, and error contracts.
+- Completed strict Zod request validation across all 13 endpoint-bearing route modules. Unknown fields, arrays or objects supplied for scalar parameters, and oversized values are rejected before route logic runs while existing SSRF checks, defaults, limits, and error shapes are preserved.
+- Backup cleanup always protects at least two normal generations and the latest migration generation, never removes corrupt or unverified files, and regenerates plus reverifies the plan immediately before deletion.
+- Disk warnings now appear before deployment-time migration failures while the existing fail-closed migration and restore paths remain unchanged.
+- Historical AI usage keeps the rates recorded at invocation time; later catalog updates do not recalculate prior estimates.
+- Moved verified backup cleanup planning and execution to a single-concurrency worker job with progress, cancellation, timeout, and status APIs so multi-gigabyte integrity checks do not block collection or HTTP.
+
+## [1.5.1] - 2026-07-20
+
+### Fixed
+
+- Restored the shared connected-device list on AI Insights and every other tab after making AI Insights the default start page.
+- Populated the device list directly from bounded summary data without requiring the hidden graph renderer or the initial Socket.IO snapshot to complete.
+
+### Testing
+
+- Added desktop and mobile browser coverage that verifies the connected-device list across all six tabs.
+- Added startup coverage with live Socket.IO transport unavailable and preserved configured URL subpaths in deployed smoke tests.
+- Verified the fix through the production `/egressview` reverse-proxy path on EC2 with live Yamaha and Cisco data.
+- Added separate English and Japanese AI Insights screenshots with IP and MAC addresses redacted, and promoted them to the first README and GitHub Pages screenshots.
+
+## [1.5.0] - 2026-07-19
+
+### Added
+
+- Added an AI Insights start page with local live metrics, bounded manual analysis, and append-only chat through Ollama, Anthropic, OpenAI, or Amazon Bedrock.
+- Added schema v7 append-only AI token usage, current/previous monthly totals, versioned USD estimates, and per-answer provider/model/token/cost metadata. Unknown model prices remain explicitly unpriced rather than guessed.
+- Added Bedrock model/inference-profile and Guardrail discovery, geo-aware selection, Converse-based connection testing, and AWS default credential-chain authentication without storing AWS keys.
+- Added runtime CPU profiling and per-stage router polling diagnostics for production performance analysis.
+
+### Changed
+
+- Made AI Insights the leftmost default view while retaining all existing Graph Map, Statistics, Connection Log, Devices, and Detection Log workflows.
+- Placed monthly AI usage at the end of the Insights page so live posture, generated analysis, and chat remain the primary workflow.
+- Made estimated-cost formatting language-aware: English uses dollar notation and Japanese uses explicit `USD` notation; no exchange-rate conversion is implied.
+- Restored bounded five-minute live graph detail while retaining summary rendering for larger ranges, extended enrichment cache lifetimes, throttled stale refresh work, and batched router poll persistence to reduce steady-state CPU and API load.
+
+### Security and Reliability
+
+- Cloud AI providers remain explicit opt-in and require saved plus per-request consent. AI context is bounded, credentials and router management details are excluded, and provider failures cannot stop collection.
+- Schema v7 preserves all earlier migrations and uses the existing verified fail-closed pre-migration backup path.
+
+### Upgrade Notes
+
+- Existing databases migrate automatically from schema v6 to v7. Startup first creates and verifies a full pre-migration backup and stops without changing the database if free space, checkpoint, copy, or integrity verification fails.
+- Amazon Bedrock uses the AWS SDK default credential chain. Foundation-model access or Marketplace subscription may still be required for the selected model; see the Bedrock setup guide.
+
 ## [1.4.0] - 2026-07-18
 
 ### Added

@@ -22,6 +22,20 @@ test('GET / returns 200 with correct title', async ({ request }) => {
   expect(body).toContain('<title>EgressView</title>');
 });
 
+test('health and readiness endpoints are public and ready after startup', async ({ request }) => {
+  const health = await request.get(`${BASE}/healthz`, { headers: { 'X-Request-Id': 'smoke-health-1' } });
+  expect(health.status()).toBe(200);
+  expect(await health.json()).toEqual({ status: 'ok' });
+  expect(health.headers()['cache-control']).toContain('no-store');
+  expect(health.headers()['x-request-id']).toBe('smoke-health-1');
+
+  const readiness = await request.get(`${BASE}/readyz`, { headers: { 'X-Request-Id': 'invalid request id' } });
+  expect(readiness.status()).toBe(200);
+  expect(await readiness.json()).toEqual({ status: 'ready' });
+  expect(readiness.headers()['cache-control']).toContain('no-store');
+  expect(readiness.headers()['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+});
+
 test('style.css is served (200, text/css)', async ({ request }) => {
   const res = await request.get(`${BASE}/style.css`);
   expect(res.status()).toBe(200);
@@ -128,7 +142,7 @@ async function authPage(page) {
   await page.addInitScript(tok => {
     localStorage.setItem('egressview_admin_token', tok);
   }, TOKEN);
-  await page.goto('/');
+  await page.goto(`${BASE}/`);
   await page.waitForLoadState('networkidle');
 }
 
@@ -267,6 +281,15 @@ async function mockSettingsRoutes(page) {
     contentType: 'application/json',
     body: JSON.stringify({ success: true, provider: 'anthropic', models: ['claude-test', '<img src=x onerror=alert(1)>'] }),
   }));
+  await page.route('**/api/ai/models', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      success: true,
+      provider: 'bedrock',
+      models: ['jp.anthropic.claude-sonnet-test', 'us.anthropic.claude-sonnet-test'],
+    }),
+  }));
   await page.route('**/api/slack/verify', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -348,7 +371,11 @@ async function mockSettingsRoutes(page) {
     contentType: 'application/json',
     body: JSON.stringify({
       backups: [],
-      config: { intervalHours: 24, maxGenerations: 7 },
+      config: { intervalHours: 24, maxGenerations: 7, maxBackupBytes: 0, autoPrune: false },
+      diagnostics: {
+        entries: [{ name: 'runtime.db.pre-migration.v6-to-v7.test.bak', kind: 'migration', size: 1024, created: new Date().toISOString(), integrity: 'unchecked', schema: null }],
+        summary: { backupBytes: 1024, freeBytes: 8 * 1024 ** 3, migrationRequiredBytes: 2 * 1024 ** 3, migrationReady: true, shortfallBytes: 0 },
+      },
     }),
   }));
   await page.route('**/api/backup/config', route => route.fulfill({
@@ -361,6 +388,41 @@ async function mockSettingsRoutes(page) {
     contentType: 'application/json',
     body: JSON.stringify({ success: true, name: 'egressview-demo.db' }),
   }));
+  await page.route('**/api/backup/prune', async route => {
+    const body = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        job: {
+          id: body.execute ? '22222222-2222-4222-8222-222222222222' : '11111111-1111-4111-8111-111111111111',
+          operation: body.execute ? 'execute' : 'preview',
+          status: 'running',
+          progress: { phase: 'queued', completed: 0, total: 0 },
+        },
+      }),
+    });
+  });
+  await page.route('**/api/backup/prune/*', async route => {
+    const id = route.request().url().split('/').pop();
+    const execute = id.startsWith('2222');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        success: true,
+        job: {
+          id,
+          operation: execute ? 'execute' : 'preview',
+          status: 'completed',
+          result: execute
+            ? { deleted: [], deletedBytes: 0 }
+            : { candidates: [], candidateBytes: 0, blocked: false },
+        },
+      }),
+    });
+  });
   await page.route('**/api/config/datasources', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -378,11 +440,84 @@ test('tab bar renders after auth', async ({ page }) => {
 
   await authPage(page);
 
-  // Exactly 5 tabs: graph map / stats / connection log / devices / notification log
+  // AI Insights is the leftmost tab and the authenticated start page.
   const tabs = page.locator('.view-tab');
   await expect(tabs.first()).toBeVisible();
   const count = await tabs.count();
   expect(count).toBe(6);
+  await expect(tabs.first()).toHaveAttribute('id', 'btn-ai');
+  await expect(page.locator('#btn-ai')).toHaveClass(/active/);
+  await expect(page.locator('#ai-container')).toHaveClass(/view-active/);
+  await expect(page.locator('#graph-container')).not.toHaveClass(/view-active/);
+});
+
+async function expectConnectedDevicesAcrossTabs(page, viewportWidth) {
+  const panel = page.locator('.side-panel');
+  const cards = page.locator('#device-list .device-card');
+  const tabIds = ['btn-ai', 'btn-graph', 'btn-stats', 'btn-log', 'btn-devices', 'btn-notif-log'];
+
+  await expect.poll(() => cards.count(), { timeout: 15_000 }).toBeGreaterThan(0);
+  for (const tabId of tabIds) {
+    await page.click(`#${tabId}`);
+    await expect(panel, `device panel should remain visible on ${tabId}`).toBeVisible();
+    await expect.poll(() => cards.count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    await panel.scrollIntoViewIfNeeded();
+    const box = await panel.boundingBox();
+    expect(box, `device panel should have a layout box on ${tabId}`).not.toBeNull();
+    expect(box.x, `device panel should not overflow left on ${tabId}`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `device panel should not overflow right on ${tabId}`).toBeLessThanOrEqual(viewportWidth);
+  }
+}
+
+test('initial device panel loads when live socket updates are unavailable', async ({ page }) => {
+  if (!TOKEN) test.skip(true, 'EGRESSVIEW_TOKEN not set — skipping auth-gated test');
+
+  const errors = collectErrors(page);
+  let summaryRequests = 0;
+  await page.route('**/socket.io/**', route => {
+    const isTransportRequest = new URL(route.request().url()).searchParams.has('EIO');
+    return isTransportRequest ? route.abort() : route.continue();
+  });
+  await page.route(/\/api\/connections\/summary\?/, route => {
+    summaryRequests += 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        byDevice: [{ src: '192.0.2.25', count: 7, srcMdnsName: 'socket-independent-device' }],
+        byTarget: [],
+        edges: [],
+        total: 7,
+        buckets: 60,
+        serverTime: Date.now(),
+      }),
+    });
+  });
+  await page.addInitScript(tok => {
+    localStorage.setItem('egressview_admin_token', tok);
+  }, TOKEN);
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+
+  await expect.poll(() => summaryRequests).toBeGreaterThan(0);
+  expect(errors, `Startup errors:\n  ${errors.join('\n  ')}`).toHaveLength(0);
+  await expect(page.locator('#device-list .device-card')).toHaveCount(1);
+  await expect(page.locator('#device-list')).toContainText('socket-independent-device');
+});
+
+test('desktop keeps the connected device panel populated across every tab', async ({ page }) => {
+  if (!TOKEN) test.skip(true, 'EGRESSVIEW_TOKEN not set — skipping auth-gated test');
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await authPage(page);
+  await expectConnectedDevicesAcrossTabs(page, 1440);
+});
+
+test('mobile keeps the connected device panel populated across every tab', async ({ page }) => {
+  if (!TOKEN) test.skip(true, 'EGRESSVIEW_TOKEN not set — skipping auth-gated test');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await authPage(page);
+  await expectConnectedDevicesAcrossTabs(page, 390);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test('mobile viewer keeps navigation, logs, and device details inside the viewport', async ({ page }) => {
@@ -440,7 +575,8 @@ test('graph canvas renders after auth from the summary API', async ({ page }) =>
 
   await authPage(page);
 
-  // The initial Socket.IO payload triggers a bounded summary fetch and render.
+  // The initial Socket.IO payload caches the summary; opening Graph renders it.
+  await page.click('#btn-graph');
   const graphContainer = page.locator('#graph-container');
   await expect(graphContainer).toBeVisible();
   const childCount = await graphContainer.evaluate(el => el.children.length);
@@ -461,6 +597,7 @@ test('graph tooltips render external values as text', async ({ page }) => {
 
   const errors = collectErrors(page);
   await authPage(page);
+  await page.click('#btn-graph');
   await page.evaluate(async () => {
     const panels = await import('/js/graph-panels.js?v=p2-27-tooltip-smoke');
     panels.showTooltip({ clientX: 100, clientY: 100 }, {
@@ -600,14 +737,95 @@ test('AI insights renders local facts and links threats to the filtered log', as
       previous: { connections: 20, devices: 3, destinations: 8, safe: 20, warn: 0, danger: 0 },
     }),
   }));
+  await page.route(/\/api\/ai\/usage\/monthly(?:\?|$)/, route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({
+      pricing: { currency: 'USD', approximate: true },
+      current: {
+        requests: 3, pricedRequests: 2, unknownPriceRequests: 1,
+        inputTokens: 1200, outputTokens: 300, totalTokens: 1500,
+        pricedTokens: 1050, unpricedTokens: 450, estimatedCostUsd: 0.0084,
+        unpricedModels: [{ provider: 'openai', model: 'future-model', requests: 1, totalTokens: 450 }],
+      },
+      previous: { requests: 1, pricedRequests: 1, inputTokens: 100, outputTokens: 50, totalTokens: 150, estimatedCostUsd: 0.0004 },
+    }),
+  }));
 
   await page.click('#btn-ai');
   await expect(page.locator('#ai-container')).toHaveClass(/view-active/);
   await expect(page.locator('#ai-value-connections')).toHaveText('25');
+  await expect(page.locator('#ai-usage-current-tokens')).toContainText('1,500');
+  await expect(page.locator('#ai-usage-current-cost')).toContainText(/USD\s*0\.0084/);
+  await expect(page.locator('#ai-usage-current-cost')).toContainText('部分合計');
+  await expect(page.locator('#ai-usage-current-unpriced')).toContainText('450');
+  await expect(page.locator('#ai-usage-caveat')).toContainText('openai/future-model');
+  await expect(page.locator('.ai-chat + .ai-usage-summary')).toBeVisible();
+  await page.route(/\/api\/config\/general$/, route => route.request().method() === 'POST'
+    ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ success: true, language: 'en' }) })
+    : route.continue());
+  await page.click('#settings-btn');
+  await page.click('.settings-tab[data-tab="general"]');
+  await page.locator('#s-language').selectOption('en');
+  await page.click('#general-save-btn');
+  await expect(page.locator('#ai-usage-current-cost')).toContainText(/partial total.*\$0\.0084/);
+  await page.click('#settings-close');
   await expect(page.locator('#ai-collection-label')).toContainText(/1\/2/);
   await expect(page.locator('[data-ai-metric="danger"]')).toHaveClass(/has-findings/);
   await page.locator('[data-ai-metric="danger"]').click();
   await expect(page.locator('#log-container')).toHaveClass(/view-active/);
+});
+
+test('AI chat keeps a persisted question visible when provider inference fails', async ({ page }) => {
+  if (!TOKEN) test.skip(true, 'EGRESSVIEW_TOKEN not set — skipping auth-gated test');
+
+  let questionPersisted = false;
+  await page.route(/\/api\/ai\/conversations(?:\/conversation-1)?(?:\?|$)/, route => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/conversation-1')) {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          messages: [
+            { role: 'user', body: 'Which connection should I review?', status: 'completed' },
+            { role: 'assistant', body: '', status: 'failed', provider: 'openai', model: 'gpt-5-mini' },
+          ],
+        }),
+      });
+    }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        conversations: questionPersisted
+          ? [{ conversationId: 'conversation-1', createdAt: Date.now(), messageCount: 2 }]
+          : [],
+        storage: questionPersisted
+          ? { conversations: 1, messages: 2, bodyBytes: 33 }
+          : { conversations: 0, messages: 0, bodyBytes: 0 },
+      }),
+    });
+  });
+  await page.route(/\/api\/ai\/chat$/, route => {
+    questionPersisted = true;
+    return route.fulfill({
+      status: 502,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: 'Provider temporarily unavailable',
+        conversationId: 'conversation-1',
+      }),
+    });
+  });
+
+  await authPage(page);
+  await page.click('#btn-ai');
+  await page.locator('#ai-chat-input').fill('Which connection should I review?');
+  await page.click('#ai-chat-send-btn');
+
+  await expect(page.locator('#ai-error')).toContainText('Provider temporarily unavailable');
+  await expect(page.locator('#ai-chat-messages .is-user')).toHaveText('Which connection should I review?');
+  await expect(page.locator('#ai-chat-messages .is-assistant')).toHaveClass(/is-failed/);
+  await expect(page.locator('#ai-chat-messages .is-assistant')).not.toHaveClass(/is-pending/);
+  await expect(page.locator('#ai-conversation-select')).toHaveValue('conversation-1');
 });
 
 // (7) Notification log detail: clicking a row opens it, the top-right X closes it
@@ -1070,6 +1288,7 @@ test('fifteen-minute graph remains available as a summary range', async ({ page 
 
   const errors = collectErrors(page);
   await authPage(page);
+  await page.click('#btn-graph');
   await page.locator('#time-filter-select').selectOption('15m');
   await expect(page.locator('#time-filter-select option:checked')).toContainText(/15 min|15分/);
   await expect(page.locator('#graph-summary-notice')).toBeVisible();
@@ -1197,11 +1416,24 @@ test('settings tabs save and connection buttons work without console errors', as
   await page.locator('#s-ai-model-select').selectOption(pickedModel);
   await expect(page.locator('#s-ai-model')).toHaveValue(pickedModel);
 
+  // Bedrock geo selection discovers and filters models without requiring a
+  // second click on the connection/model refresh button.
+  await page.locator('#s-ai-provider').selectOption('bedrock');
+  await page.locator('#s-ai-region-select').selectOption('ap-northeast-1');
+  await page.locator('#s-ai-profile-select').selectOption('jp.');
+  await expect(page.locator('#s-ai-model-select')).toBeEnabled();
+  await expect(page.locator('#s-ai-model-select option')).toHaveCount(2);
+  await page.locator('#s-ai-model-select').selectOption('jp.anthropic.claude-sonnet-test');
+  await expect(page.locator('#s-ai-model')).toHaveValue('jp.anthropic.claude-sonnet-test');
+
   await page.click('.settings-tab[data-tab="backup"]');
   await expect(page.locator('#pane-backup')).toHaveClass(/active/);
   await expect(page.locator('#backup-list .backup-list-empty')).toHaveCount(1);
+  await expect(page.locator('#backup-capacity-status')).toContainText('8.00 GiB');
   await page.click('#backup-config-save');
   await expect(page.locator('#backup-config-status')).toBeVisible();
+  await page.click('#backup-prune-btn');
+  await expect(page.locator('#backup-prune-status')).toBeVisible();
   await page.click('#backup-create-btn');
   await expect(page.locator('#backup-action-status')).toBeVisible();
 
