@@ -305,7 +305,7 @@ document.getElementById('asus-connect-btn').addEventListener('click', async () =
     body.username = document.getElementById('s-asus-user').value.trim();
     // Omit if empty (server uses saved password)
     if (passEl.value) body.password = passEl.value;
-    body.useV1 = document.getElementById('enable-v1-asus').checked;
+    body.asusLoginV1 = document.getElementById('enable-v1-asus').checked;
   }
   const ok = await connectRouter(body, 'asus-status', 'asus-connect-btn', 'enable-asus');
   if (ok) {

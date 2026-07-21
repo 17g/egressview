@@ -344,7 +344,7 @@ socket.on('config', cfg => {
     connState.l2.enabled = cfg.asusEnabled;
     connState.l2.ready   = !!cfg.authenticated;
     connState.l2.ip      = cfg.routerIp || '';
-    connState.l2.useV1 = !!cfg.asusLoginV1;
+    connState.l2.asusLoginV1 = !!cfg.asusLoginV1;
     updateConnBadge('l2');
   }
   if (cfg.homeCountry) {

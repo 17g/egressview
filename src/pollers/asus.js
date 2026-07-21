@@ -54,7 +54,7 @@ async function loginToRouter(ip, username, password, loginV1 = false) {
   const base = `http://${ip}`;
   if (loginV1) return loginV1ToRouter(ip, username, password);
 
-  const id = crypto.randomBytes(5).toString('hex');
+  const id =  crypto.randomBytes(5).toString('hex');
   const nonceRes = await axios.post(`${base}/get_Nonce.cgi`, JSON.stringify({ id }), {
     headers: { 'Content-Type': 'application/json' },
     timeout: ASUS_AUTH_REQUEST_TIMEOUT_MS,
@@ -119,7 +119,7 @@ async function loginV1ToRouter(ip, username, password) {
       'Host': `${ip}`,
       'upgrade-insecure-requests': '1',
      },
-    timeout: 8000,
+    timeout: ASUS_AUTH_REQUEST_TIMEOUT_MS,
     maxRedirects: 0,
     validateStatus: () => true,
   });

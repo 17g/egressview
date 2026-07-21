@@ -43,6 +43,7 @@ const routerLoginSchema = z.object({
   doAsus: z.boolean().optional(),
   doYamaha: z.boolean().optional(),
   doCisco: z.boolean().optional(),
+  asusLoginV1: z.boolean().optional(),
 }).strict();
 
 module.exports = function routerSetupRoutes(ctx) {
@@ -166,7 +167,7 @@ module.exports = function routerSetupRoutes(ctx) {
     const parsed = parseRequest(routerLoginSchema, req.body, res);
     if (!parsed.ok) return;
     const {
-      username, password, routerIp, useV1,
+      username, password, routerIp, asusLoginV1,
       yamahaIp, yamahaUser, yamahaPass, yamahaNat,
       ciscoIp, ciscoUser, ciscoPass, ciscoEnablePass,
       doAsus, doYamaha, doCisco,
@@ -198,10 +199,10 @@ module.exports = function routerSetupRoutes(ctx) {
       };
       try {
         const targetIp = routerIp || DEFAULT_ROUTER_IP;
-        await asus.login(targetIp, username, finalPass, useV1);
+        await asus.login(targetIp, username, finalPass, asusLoginV1);
         asus.startPolling(POLL_INTERVAL);
         try {
-          saveConfig({ asus: { ip: targetIp, user: username, pass: finalPass, loginV1: useV1 } });
+          saveConfig({ asus: { ip: targetIp, user: username, pass: finalPass, loginV1: asusLoginV1 } });
         } catch (saveErr) {
           try { await restoreAsus(previous); } catch (rollbackErr) {
             logger.error('[auth] ASUS runtime rollback failed:', rollbackErr.message);
