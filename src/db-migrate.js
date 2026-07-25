@@ -30,7 +30,7 @@ const {
 } = require('./router-id');
 const { checkObservationConsistency } = require('./observation-consistency');
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 9;
 
 // Backup copy (1x DB size) plus WAL growth and migration workspace headroom.
 const MIN_FREE_DISK_FACTOR = 2;
@@ -254,6 +254,80 @@ const MIGRATIONS = [
         );
         CREATE INDEX IF NOT EXISTS idx_ai_usage_created
           ON ai_usage(createdAt);
+      `);
+    },
+  },
+  {
+    version: 8,
+    description: 'append-only AI event notification history (P2-57)',
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_notification_events (
+          eventId          TEXT PRIMARY KEY,
+          triggerType      TEXT NOT NULL CHECK(triggerType IN ('scheduled', 'threat', 'manual', 'test')),
+          triggerKey       TEXT UNIQUE,
+          cause            TEXT NOT NULL,
+          createdAt        INTEGER NOT NULL,
+          rangeFrom        INTEGER NOT NULL,
+          rangeTo          INTEGER NOT NULL,
+          status           TEXT NOT NULL CHECK(status IN ('complete', 'failed')),
+          provider         TEXT NOT NULL,
+          model            TEXT NOT NULL,
+          body             TEXT,
+          slackSent        INTEGER NOT NULL DEFAULT 0,
+          inputTokens      INTEGER NOT NULL DEFAULT 0 CHECK(inputTokens >= 0),
+          outputTokens     INTEGER NOT NULL DEFAULT 0 CHECK(outputTokens >= 0),
+          totalTokens      INTEGER NOT NULL DEFAULT 0 CHECK(totalTokens >= 0),
+          estimatedCostUsd REAL,
+          errorCode        TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_notification_created
+          ON ai_notification_events(createdAt DESC);
+        CREATE INDEX IF NOT EXISTS idx_ai_notification_cause
+          ON ai_notification_events(triggerType, cause, createdAt DESC);
+      `);
+    },
+  },
+  {
+    version: 9,
+    description: 'authentication session metadata and append-only audit events (P2-58)',
+    up(db) {
+      const hasSessions = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
+      ).get();
+      if (hasSessions) {
+        const columns = new Set(
+          db.prepare('PRAGMA table_info(sessions)').all().map(row => row.name)
+        );
+        if (!columns.has('csrfHash')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN csrfHash TEXT');
+        }
+        if (!columns.has('authMethod')) {
+          db.exec(`ALTER TABLE sessions ADD COLUMN authMethod TEXT NOT NULL DEFAULT 'local'`);
+        }
+        if (!columns.has('subjectHash')) {
+          db.exec('ALTER TABLE sessions ADD COLUMN subjectHash TEXT');
+        }
+      }
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS audit_events (
+          eventId      TEXT PRIMARY KEY,
+          createdAt    INTEGER NOT NULL,
+          eventType    TEXT NOT NULL,
+          outcome      TEXT NOT NULL CHECK(outcome IN ('success', 'failure')),
+          authMethod   TEXT,
+          actorHash    TEXT,
+          requestId    TEXT,
+          clientIpHash TEXT,
+          httpMethod   TEXT,
+          path          TEXT,
+          metadata     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_events_created
+          ON audit_events(createdAt DESC);
+        CREATE INDEX IF NOT EXISTS idx_audit_events_type
+          ON audit_events(eventType, createdAt DESC);
       `);
     },
   },

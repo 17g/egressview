@@ -65,7 +65,7 @@ const PHASE2_JS_FILES = [
   'stats-helpers.js', 'stats-charts.js', 'stats-map.js',
   'view-tabs.js', 'log.js', 'ai-insights.js', 'beacon.js', 'threat-popup.js',
   'devices.js', 'notif-log.js', 'main.js',
-  'settings-ai.js',
+  'settings-ai.js', 'settings-security.js',
 ];
 for (const file of PHASE2_JS_FILES) {
   test(`js/${file} is served (200)`, async ({ request }) => {
@@ -132,6 +132,14 @@ test('no uncaught JS errors on page load', async ({ page }) => {
   await page.waitForTimeout(2000); // allow scripts to parse and execute
 
   expect(errors, `Uncaught JS errors:\n  ${errors.join('\n  ')}`).toHaveLength(0);
+});
+
+test('unauthenticated browser shows the local recovery login without storing a token', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('.login-overlay')).toBeVisible();
+  await expect(page.locator('.login-primary')).toBeVisible();
+  await expect(page.locator('.login-google')).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem('egressview_admin_token'))).toBeNull();
 });
 
 // ─── Auth-gated UI tests ──────────────────────────────────────────────────────
@@ -238,19 +246,39 @@ async function mockSettingsRoutes(page) {
       suggested: { yamahaIp: '192.168.1.1', yamahaUser: 'admin', yamahaNat: '100' },
     }),
   }));
+  let savedSlackToken = '';
   await page.route('**/api/config/slack', async route => {
     if (route.request().method() === 'GET') {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ config: { enabled: false, cooldownMinutes: 60 } }),
+        body: JSON.stringify({
+          config: {
+            enabled: true,
+            tokenSet: true,
+            userId: 'USAVED123',
+            displayName: 'Saved User',
+            cooldownMinutes: 60,
+          },
+        }),
       });
       return;
     }
+    const requestBody = route.request().postDataJSON();
+    savedSlackToken = requestBody.token || savedSlackToken;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ success: true, config: { enabled: false, cooldownMinutes: 60 } }),
+      body: JSON.stringify({
+        success: true,
+        config: {
+          enabled: requestBody.enabled,
+          tokenSet: Boolean(savedSlackToken),
+          userId: requestBody.userId,
+          displayName: requestBody.displayName,
+          cooldownMinutes: requestBody.cooldownMinutes,
+        },
+      }),
     });
   });
   await page.route('**/api/config/ai', async route => {
@@ -433,6 +461,7 @@ async function mockSettingsRoutes(page) {
       dhcpd: { enabled: false, logFile: '/var/log/yamaha-router.log' },
     }),
   }));
+  return { get savedSlackToken() { return savedSlackToken; } };
 }
 
 test('tab bar renders after auth', async ({ page }) => {
@@ -773,6 +802,91 @@ test('AI insights renders local facts and links threats to the filtered log', as
   await expect(page.locator('[data-ai-metric="danger"]')).toHaveClass(/has-findings/);
   await page.locator('[data-ai-metric="danger"]').click();
   await expect(page.locator('#log-container')).toHaveClass(/view-active/);
+});
+
+test('AI event notification settings load and a test event appears in history', async ({ page }) => {
+  if (!TOKEN) test.skip(true, 'EGRESSVIEW_TOKEN not set — skipping auth-gated test');
+
+  const errors = collectErrors(page);
+  let config = {
+    frequency: 'weekly',
+    weekday: 1,
+    time: '09:30',
+    timezone: 'Asia/Tokyo',
+    rangeHours: 168,
+    destinations: { ui: true, slack: false },
+    threat: {
+      enabled: true,
+      dangerThreshold: 1,
+      newDestinationsThreshold: 2,
+      increaseThreshold: 3,
+    },
+    dailyLimit: 3,
+    cooldownMinutes: 60,
+    automationConsent: false,
+  };
+  let events = [];
+  let configSaveRequests = 0;
+
+  await page.route(/\/api\/ai\/notification-config$/, route => {
+    if (route.request().method() === 'POST') {
+      configSaveRequests++;
+      config = route.request().postDataJSON();
+    }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ config, status: { provider: 'ollama' } }),
+    });
+  });
+  await page.route(/\/api\/ai\/notification-events(?:\?|$)/, route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ events }),
+  }));
+  await page.route(/\/api\/ai\/notification-test$/, route => {
+    events = [{
+      id: 1,
+      triggerType: 'test',
+      status: 'complete',
+      provider: '',
+      model: '',
+      body: '<script>notification test</script>',
+      slackSent: false,
+      createdAt: Date.now(),
+    }];
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ success: true, event: events[0] }),
+    });
+  });
+
+  await authPage(page);
+  await page.click('#btn-ai');
+  await page.click('#ai-notification-open-btn');
+  await expect(page.locator('#ai-notification-modal')).not.toHaveClass(/is-hidden/);
+  await expect(page.locator('#ai-notification-frequency')).toHaveValue('weekly');
+  await expect(page.locator('#ai-notification-weekday')).toHaveValue('1');
+  await expect(page.locator('#ai-notification-time')).toHaveValue('09:30');
+  await expect(page.locator('#ai-notification-threat-enabled')).toBeChecked();
+
+  await page.locator('#ai-notification-limit').fill('4');
+  await page.click('#ai-notification-save-btn');
+  await expect(page.locator('#ai-notification-confirm-modal')).not.toHaveClass(/is-hidden/);
+  await expect(page.locator('#ai-notification-summary')).toContainText('4');
+  expect(configSaveRequests).toBe(0);
+  await page.click('#ai-notification-confirm-btn');
+  await expect(page.locator('#ai-notification-confirm-modal')).toHaveClass(/is-hidden/);
+  await expect(page.locator('#ai-notification-modal')).toHaveClass(/is-hidden/);
+  expect(configSaveRequests).toBe(1);
+
+  await page.click('#ai-notification-open-btn');
+  await expect(page.locator('#ai-notification-limit')).toHaveValue('4');
+  await page.click('#ai-notification-test-btn');
+  await expect(page.locator('#ai-notification-events .ai-notification-event')).toHaveCount(1);
+  await expect(page.locator('#ai-notification-events')).toContainText('<script>notification test</script>');
+  await expect(page.locator('#ai-notification-events script')).toHaveCount(0);
+  await page.click('#ai-notification-close-btn');
+  await expect(page.locator('#ai-notification-modal')).toHaveClass(/is-hidden/);
+  expect(fatalErrors(errors), `AI notification errors:\n  ${fatalErrors(errors).join('\n  ')}`).toHaveLength(0);
 });
 
 test('AI chat keeps a persisted question visible when provider inference fails', async ({ page }) => {
@@ -1334,12 +1448,14 @@ test('settings tabs save and connection buttons work without console errors', as
   if (!TOKEN) test.skip(true, 'EGRESSVIEW_TOKEN not set — skipping auth-gated test');
 
   const errors = collectErrors(page);
-  await mockSettingsRoutes(page);
+  const settingsState = await mockSettingsRoutes(page);
   await authPage(page);
 
   await page.click('#settings-btn');
   await expect(page.locator('#settings-overlay')).toBeVisible();
+  await expect(page.locator('#pane-general')).toHaveClass(/active/);
 
+  await page.click('.settings-tab[data-tab="l3l4"]');
   await page.click('#router-add-btn');
   await page.locator('#router-display-name').fill('<img src=x onerror=alert(1)>');
   await page.locator('#router-ip').fill('192.168.1.1');
@@ -1381,14 +1497,10 @@ test('settings tabs save and connection buttons work without console errors', as
   await expect(page.locator('#general-status')).toBeVisible();
   await expect(page.locator('#general-status')).toContainText(/保存|Saved|✓/);
 
-  await page.click('.settings-tab[data-tab="threat"]');
-  await expect(page.locator('#pane-threat')).toHaveClass(/active/);
-  await page.click('#threat-save-btn');
-  await expect(page.locator('#threat-status')).toBeVisible();
-  await page.locator('#s-beacon-minobs').fill('4');
-  await page.click('#beacon-save-btn');
-  await expect(page.locator('#beacon-status')).toBeVisible();
-
+  await expect(page.locator('#s-slack-enabled')).toBeChecked();
+  await expect(page.locator('#s-slack-token')).toHaveAttribute('placeholder', /保存済み|Saved/);
+  await expect(page.locator('#s-slack-username')).toHaveValue('Saved User');
+  await expect(page.locator('#s-slack-userid')).toHaveValue('USAVED123');
   await page.locator('#s-slack-token').fill('xoxb-demo-token');
   await page.click('#slack-verify-btn');
   await expect(page.locator('#slack-workspace-info')).toBeVisible();
@@ -1396,9 +1508,20 @@ test('settings tabs save and connection buttons work without console errors', as
   await page.click('#slack-lookup-btn');
   await expect(page.locator('#slack-user-info')).toBeVisible();
   await page.click('#slack-save-btn');
-  await expect(page.locator('#slack-status')).toBeVisible();
+  await expect(page.locator('#slack-status')).toContainText(/保存|Saved|✓/);
+  await expect(page.locator('#s-slack-token')).toHaveValue('');
+  await expect(page.locator('#s-slack-token')).toHaveAttribute('placeholder', /保存済み|Saved/);
+  expect(settingsState.savedSlackToken).toBe('xoxb-demo-token');
   await page.click('#slack-test-btn');
   await expect(page.locator('#slack-status')).toBeVisible();
+
+  await page.click('.settings-tab[data-tab="threat"]');
+  await expect(page.locator('#pane-threat')).toHaveClass(/active/);
+  await page.click('#threat-save-btn');
+  await expect(page.locator('#threat-status')).toBeVisible();
+  await page.locator('#s-beacon-minobs').fill('4');
+  await page.click('#beacon-save-btn');
+  await expect(page.locator('#beacon-status')).toBeVisible();
 
   await page.click('.settings-tab[data-tab="ai"]');
   await expect(page.locator('#pane-ai')).toHaveClass(/active/);

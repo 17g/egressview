@@ -368,21 +368,37 @@ describe('Frontend TDZ lint', () => {
   });
 
   it('general settings pane does not use inline style attributes', () => {
-    const start = html.indexOf('<div class="settings-pane" id="pane-general">');
+    const start = html.indexOf('id="pane-general">');
     const end = html.indexOf('<!-- Threat Intel settings -->', start);
     assert.notEqual(start, -1);
     assert.notEqual(end, -1);
     assert.doesNotMatch(html.slice(start, end), /\sstyle\s*=/,
-      'general, password, session, and token settings should use CSS classes');
+      'general, password, session, token, and Slack settings should use CSS classes');
   });
 
-  it('threat, beacon, and Slack settings do not use inline style attributes', () => {
+  it('shows General as the first and default settings tab with Slack inside it', () => {
+    const navStart = html.indexOf('<nav class="settings-tabs">');
+    const navEnd = html.indexOf('</nav>', navStart);
+    const nav = html.slice(navStart, navEnd);
+    assert.ok(nav.indexOf('data-tab="general"') < nav.indexOf('data-tab="l3l4"'));
+    assert.match(nav, /class="settings-tab active" data-tab="general"/);
+
+    const generalStart = html.indexOf('<div class="settings-pane active" id="pane-general">');
+    const threatStart = html.indexOf('<div class="settings-pane" id="pane-threat">');
+    const general = html.slice(generalStart, threatStart);
+    const threatEnd = html.indexOf('<!-- AI provider settings -->', threatStart);
+    const threat = html.slice(threatStart, threatEnd);
+    assert.match(general, /id="slack-save-btn"/);
+    assert.doesNotMatch(threat, /id="slack-save-btn"/);
+  });
+
+  it('threat and beacon settings do not use inline style attributes', () => {
     const start = html.indexOf('<div class="settings-pane" id="pane-threat">');
     const end = html.indexOf('<!-- Backup / Restore -->', start);
     assert.notEqual(start, -1);
     assert.notEqual(end, -1);
     assert.doesNotMatch(html.slice(start, end), /\sstyle\s*=/,
-      'threat, beacon, and Slack settings should use CSS classes');
+      'threat and beacon settings should use CSS classes');
   });
 
   it('backup and data source settings do not use inline style attributes', () => {
@@ -931,11 +947,13 @@ describe('Server runtime invariants', () => {
   it('demo mode passes the selected runtime DB path to every SQLite-backed store', () => {
     assert.match(serverJs, /const\s+configuredDbPath\s*=\s*process\.env\.EGRESSVIEW_DB_PATH\s*\|\|\s*process\.env\.EGRESSVIEW_DB\s*\|\|\s*['"]{2}/,
       'server startup should honor both EGRESSVIEW_DB_PATH and the documented EGRESSVIEW_DB');
+    assert.match(serverJs, /const\s+productionDbPath\s*=\s*configuredDbPath[\s\S]*?path\.join\(__dirname,\s*['"]\.egressview\.db['"]\)/,
+      'normal startup must resolve an explicit production DB path even when no DB env var is set');
     assert.match(serverJs, /const\s+runtimeDbPath\s*=\s*DEMO_MODE\s*\?/,
       'server startup should choose one runtime DB path before initializing stores');
     // All long-lived DB connections open through the bootstrap boundary on the
     // selected runtime path (P2-30: history/migrations first, everything after).
-    assert.match(serverJs, /runDbBootstrap\(\{\s*dbPath:\s*runtimeDbPath,[\s\S]*?history,\s*sessions,\s*devices,\s*enrichment,\s*beacons\s*\}\)/,
+    assert.match(serverJs, /runDbBootstrap\(\{\s*dbPath:\s*runtimeDbPath,[\s\S]*?history,\s*sessions,\s*devices,\s*enrichment,\s*beacons,\s*authAudit,\s*\}\)/,
       'server startup should open every SQLite-backed store via runDbBootstrap on the runtime DB path');
     const bootstrapJs = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'db-bootstrap.js'), 'utf8');
     for (const call of [
@@ -944,6 +962,7 @@ describe('Server runtime invariants', () => {
       'devices.initDb(dbPath)',
       'enrichment.initDb(dbPath)',
       'beacons.initDb(dbPath)',
+      'authAudit.initDb(dbPath)',
     ]) {
       assert.match(bootstrapJs, new RegExp(call.replace(/[().]/g, '\\$&')),
         `db-bootstrap must pass the DB path to ${call.split('.')[0]}`);

@@ -6,7 +6,7 @@ EgressView exposes a private administration API for its web UI and local automat
 
 ## Base URL and authentication
 
-API paths are rooted at `/api`, even when the web UI is served below a subpath. Except for the two public authentication endpoints noted below, every request requires an `X-Admin-Token` header containing either an admin token or a browser session token.
+API paths are rooted at `/api`, even when the web UI is served below a subpath. Protected requests accept an `X-Admin-Token` automation credential or an HttpOnly browser session cookie. Cookie-authenticated mutations also require the matching `X-CSRF-Token`.
 
 ```bash
 export EGRESSVIEW_URL='https://egressview.example.net'
@@ -34,7 +34,7 @@ curl --fail-with-body \
 {"success":true,"token":"session-token","expiresAt":1784304000000}
 ```
 
-`POST /api/admin/verify` is also public and verifies a token supplied in the request body. The detail-free `/healthz` and `/readyz` checks are public; all other endpoints are protected.
+`POST /api/admin/verify` is also public and verifies a token supplied in the request body. Authentication status/method discovery and the OIDC redirect/callback are public. The detail-free `/healthz` and `/readyz` checks are public; all other endpoints are protected.
 
 ## Common behavior
 
@@ -151,18 +151,26 @@ Restore is fail-closed: EgressView validates the source, confirms a safety backu
 
 ## Endpoint catalog
 
-All 75 implemented HTTP endpoints are listed below. **Public** means no token is required; every other row requires `X-Admin-Token`.
+All 88 implemented HTTP endpoints are listed below. **Public** means no token is required. Protected endpoints accept `X-Admin-Token` or the browser's HttpOnly session cookie; cookie-authenticated mutations additionally require `X-CSRF-Token`.
 
 | Area | Method and path | Access |
 |---|---|---|
 | Authentication | `POST /api/auth/login` | Public |
 | Authentication | `POST /api/admin/verify` | Public |
+| Authentication | `GET /api/auth/status` | Public |
+| Authentication | `GET /api/auth/methods` | Public |
+| Authentication | `GET /api/auth/oidc/start` | Public |
+| Authentication | `GET /api/auth/oidc/callback` | Public |
 | Authentication | `POST /api/auth/logout` | Protected |
 | Authentication | `GET /api/auth/sessions` | Protected |
 | Authentication | `POST /api/auth/sessions/:id/revoke` | Protected |
 | Authentication | `POST /api/auth/sessions/revoke-all` | Protected |
 | Authentication | `POST /api/auth/change-password` | Protected |
 | Authentication | `POST /api/admin/regenerate-token` | Protected |
+| Authentication | `GET /api/auth/security-config` | Protected |
+| Authentication | `POST /api/auth/security-config` | Protected |
+| Authentication | `POST /api/auth/oidc/test` | Protected |
+| Authentication | `GET /api/auth/audit-events` | Protected |
 | Router setup | `POST /api/nonce` | Protected |
 | Router setup | `POST /api/yamaha/detect` | Protected |
 | Router setup | `POST /api/cisco/detect` | Protected |
@@ -218,6 +226,11 @@ All 75 implemented HTTP endpoints are listed below. **Public** means no token is
 | AI insights | `GET /api/ai/usage/monthly` | Protected; current and previous local-month token usage and approximate USD cost |
 | AI insights | `GET /api/ai/pricing/diagnostics` | Protected; selected-model status and grouped unpriced usage |
 | AI insights | `POST /api/ai/analyze` | Protected; manually analyzes aggregates (incl. destination IPs, hostnames, device names, MAC); cloud requires double consent |
+| AI notifications | `GET /api/ai/notification-config` | Protected; returns schedule, trigger, destination, and runtime status |
+| AI notifications | `POST /api/ai/notification-config` | Protected; saves validated scheduling and automation consent settings |
+| AI notifications | `GET /api/ai/notification-events` | Protected; returns up to 200 append-only delivery records |
+| AI notifications | `POST /api/ai/notification-test` | Protected; tests UI/Slack delivery without invoking AI |
+| AI notifications | `POST /api/ai/notification-run-now` | Protected; explicitly runs the configured analysis range |
 | AI chat | `POST /api/ai/chat` | Protected; appends the question first and stores an answer or failure row |
 | AI chat | `GET /api/ai/conversations` | Protected; conversation list and storage usage |
 | AI chat | `GET /api/ai/conversations/:id` | Protected; message history preserved across restarts |

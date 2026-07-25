@@ -22,7 +22,7 @@ EgressView は Yamaha RTX / Cisco IOS を使う家庭・SOHOネットワーク�
 
 v1.5.0では、AI洞察をスタートページとして正式追加しました。ローカル指標、前期間比較、Ollama / Anthropic / OpenAI / Amazon Bedrockによる明示実行の分析・対話、append-only会話履歴、月次token使用量と概算料金を確認できます。Bedrockのmodel / inference profile / Guardrail自動検出、CPU負荷の計測と収集処理の最適化も追加しています。詳細は[変更履歴](CHANGELOG.md)を参照してください。
 
-既存DBは起動時にschema v7へ自動移行されます。適用前に完全バックアップを作成・検証し、空き容量、checkpoint、copy、integrity検査のいずれかが失敗した場合はDBを変更せず起動を停止します。Linux conntrackはDocker統合試験済みのプレビューで、実機ルーターでの検証は未完了です。
+既存DBは起動時にschema v8へ自動移行されます。適用前に完全バックアップを作成・検証し、空き容量、checkpoint、copy、integrity検査のいずれかが失敗した場合はDBを変更せず起動を停止します。Linux conntrackはDocker統合試験済みのプレビューで、実機ルーターでの検証は未完了です。
 
 ## 家庭・SOHOのセキュリティ対策として
 
@@ -36,7 +36,7 @@ EgressViewは、多くの家庭ユーザーが答えを持てていない問い�
 - **外部サービスによる手動脅威調査** — 明示操作時だけAbuseIPDB・VirusTotal・AlienVault OTXへ問い合わせ（cache/rate limit対応、[ガイド](docs/manual-threat-investigation.ja.md)）
 - **Linux conntrackプレビュー** — Linux系ルーターからSSH収集。Docker統合試験済み、実機確認は未完了（[設定](docs/setup-conntrack.ja.md)）
 - **モバイル監視ビュー** — VPN・プライベートネットワーク内のスマートフォンから、ルーター状態、グラフ、統計、通信ログ、端末一覧、検出ログを確認
-- **AI洞察スタートページ** — 起動直後に収集状態・接続・端末・宛先・脅威と前期間比較を表示。上限付き端末一覧とASUS node要約を使ってOllama / Anthropic / OpenAI / Amazon Bedrockで手動分析・対話でき、版管理料金表による月次token・概算料金、未価格modelがある場合の部分合計、回答ごとのモデル/料金も確認可能（[設定ガイド](docs/setup-ai-insights.ja.md)、[Bedrock本番設定](docs/setup-bedrock.ja.md)）
+- **AI洞察スタートページ** — 起動直後に収集状態・接続・端末・宛先・脅威と前期間比較を表示。上限付き端末一覧とASUS node要約を使ってOllama / Anthropic / OpenAI / Amazon Bedrockで手動分析・対話でき、版管理料金表による月次token・概算料金、未価格modelがある場合の部分合計、回答ごとのモデル/料金も確認可能。既定OFFのイベント通知では、日次/週次レポートと上限付き脅威変化分析をappend-only UI履歴またはSlackへ送信できます（[設定ガイド](docs/setup-ai-insights.ja.md)、[Bedrock本番設定](docs/setup-bedrock.ja.md)）
 - **即時Slackアラート** — 任意のデバイスが既知のC2サーバーやマルウェア配布元に接続した瞬間にDM通知
 - **ハードウェア変更不要** — Mac・PC・Raspberry Piにインストールするだけ。既存のYamaha RTX / Cisco IOSルーターと共存
 
@@ -211,7 +211,7 @@ npm start
 
 ### Step 3 — ブラウザを開いてログイン
 
-初回起動時に初期**ログインパスワード**がコンソールに表示されます：
+初回起動時、対話terminalでは初期**ログインパスワード**を一度だけ表示します。service等の非対話起動では永続logへ出さず、mode `0600`の`.egressview.json.initial-login-password`へ保存します：
 
 ```
 ══════════════════════════════════════════════════════════════
@@ -240,16 +240,17 @@ npm start
 
 数秒後にデバイス、セッション、統計情報がUIに表示されはじめます。
 
-> **注意:** 認証情報は初回起動時に1度だけ生成され、（ハッシュ化して）`.egressview.json` に保存されます。パスワードを紛失した場合は `.egressview.json` の `auth` セクションを削除して再起動すれば、新しい初期パスワードが表示されます。
+> **注意:** パスワードはversion付きscrypt recordだけを保存します。初回ログイン成功後、one-time password fileは削除されます。
 
 ## 認証
 
-全APIエンドポイントとWebSocket接続は保護されています。認証情報は2種類あります：
+全APIエンドポイントとWebSocket接続は保護されています。ローカル管理者は無効化できず、Google OIDCは任意の追加ログイン方式です。
 
 | 認証情報 | 用途 | 場所 |
 |---------|------|------|
 | **ログインパスワード** | ブラウザのログイン。端末ごとに失効可能なセッションを発行（30日スライド有効期限） | 初回起動時に表示。変更は 設定 → 一般 |
 | **API トークン** | スクリプト・自動化（`X-Admin-Token` ヘッダー） | `.egressview.json`（`adminToken`）。再生成は 設定 → 一般 |
+| **Google OIDC** | 許可したGoogleアカウント。sessionはEgressView側で失効可能 | 設定 → 一般 → 認証と監査 |
 
 ### セッション管理
 
@@ -260,16 +261,21 @@ npm start
 ### パスワードを紛失した場合
 
 ```bash
-# auth セクションを削除して再起動 — 新しい初期パスワードが表示される
-node -e "const f='.egressview.json',c=require('./'+f);delete c.auth;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
-npm start
+# 対話TTY専用。全browser sessionを失効
+npm run auth:reset
+# automation用tokenも同時に再生成
+npm run auth:reset -- --regenerate-api-token
 ```
 
 ### 仕組み
 
-- パスワードは scrypt でハッシュ化、セッションは SHA-256 ハッシュとして SQLite に保存
+- 新しいパスワードは14文字以上。version付きscrypt recordを使い、旧recordはログイン成功時に移行
 - ログイン失敗時は 500ms の遅延、比較は `crypto.timingSafeEqual` を使用
-- セッショントークンは API トークンと同じ `X-Admin-Token` ヘッダー / Socket.IO ハンドシェイクで送信
+- browser sessionはSecure/HttpOnly/SameSite cookieとCSRF保護を使用。既存header tokenはautomation互換として維持
+- login/logout/session失効/token変更/認証済み更新操作を、個人情報を伏せたappend-only監査logへ記録
+- Google OIDCはAuthorization Code + PKCE、state、nonce、JWKS署名、verified email、email/domain allowlistを検証
+
+Internet公開前に[認証・reverse proxyガイド](docs/authentication.ja.md)を確認してください。
 
 ## HTTPS（オプション）
 
@@ -359,7 +365,7 @@ ASUSデバイスは**WiFiアクセスポイント（APモードまたはAiMesh�
 - 同一宛先への再通知クールダウン設定（デフォルト1時間）でスパムを防止
 - UI言語設定に連動してメッセージを日本語/英語で送信
 - 設定画面のテスト送信ボタンで設定確認可能
-- Slack Bot TokenとユーザーID（`U01XXXXXXX`）が必要 — 設定 → 脅威検出タブから設定
+- Slack Bot TokenとユーザーID（`U01XXXXXXX`）が必要 — 設定 → Generalタブから設定
 
 ### セキュリティ
 

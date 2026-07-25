@@ -6,7 +6,7 @@ EgressViewは、Web UIとローカル自動化向けに管理APIを提供しま�
 
 ## ベースURLと認証
 
-Web UIをサブパスで公開している場合も、APIは常に`/api`配下です。後述する2つの公開認証APIを除き、すべてのリクエストで`X-Admin-Token`ヘッダーにadmin tokenまたはブラウザのsession tokenを指定します。
+Web UIをサブパスで公開している場合も、APIは常に`/api`配下です。認証必須requestはautomation用`X-Admin-Token`またはHttpOnly browser session cookieを受け付けます。cookie認証による更新requestでは対応する`X-CSRF-Token`も必要です。
 
 ```bash
 export EGRESSVIEW_URL='https://egressview.example.net'
@@ -34,7 +34,7 @@ curl --fail-with-body \
 {"success":true,"token":"session-token","expiresAt":1784304000000}
 ```
 
-`POST /api/admin/verify`も公開APIで、request body内のtokenを検証します。詳細情報を返さない`/healthz`と`/readyz`も公開し、それ以外はすべて認証必須です。
+`POST /api/admin/verify`も公開APIで、request body内のtokenを検証します。認証状態・方式の取得、OIDC redirect/callback、詳細情報を返さない`/healthz`と`/readyz`も公開し、それ以外はすべて認証必須です。
 
 ## 共通仕様
 
@@ -151,18 +151,26 @@ Restoreはfail-closedです。復元元の検査、安全backup成功の確認�
 
 ## Endpoint一覧
 
-実装済みHTTP endpoint 75本の全一覧です。**公開**以外はすべて`X-Admin-Token`が必要です。
+実装済みHTTP endpoint 88本の全一覧です。**公開**以外は`X-Admin-Token`またはbrowserのHttpOnly session cookieが必要です。cookie認証による更新要求では`X-CSRF-Token`も必要です。
 
 | 分類 | Methodとpath | Access |
 |---|---|---|
 | 認証 | `POST /api/auth/login` | 公開 |
 | 認証 | `POST /api/admin/verify` | 公開 |
+| 認証 | `GET /api/auth/status` | 公開 |
+| 認証 | `GET /api/auth/methods` | 公開 |
+| 認証 | `GET /api/auth/oidc/start` | 公開 |
+| 認証 | `GET /api/auth/oidc/callback` | 公開 |
 | 認証 | `POST /api/auth/logout` | 認証必須 |
 | 認証 | `GET /api/auth/sessions` | 認証必須 |
 | 認証 | `POST /api/auth/sessions/:id/revoke` | 認証必須 |
 | 認証 | `POST /api/auth/sessions/revoke-all` | 認証必須 |
 | 認証 | `POST /api/auth/change-password` | 認証必須 |
 | 認証 | `POST /api/admin/regenerate-token` | 認証必須 |
+| 認証 | `GET /api/auth/security-config` | 認証必須 |
+| 認証 | `POST /api/auth/security-config` | 認証必須 |
+| 認証 | `POST /api/auth/oidc/test` | 認証必須 |
+| 認証 | `GET /api/auth/audit-events` | 認証必須 |
 | Router初期設定 | `POST /api/nonce` | 認証必須 |
 | Router初期設定 | `POST /api/yamaha/detect` | 認証必須 |
 | Router初期設定 | `POST /api/cisco/detect` | 認証必須 |
@@ -218,6 +226,11 @@ Restoreはfail-closedです。復元元の検査、安全backup成功の確認�
 | AI洞察 | `GET /api/ai/usage/monthly` | 認証必須。現地暦の今月・先月token使用量とUSD概算 |
 | AI洞察 | `GET /api/ai/pricing/diagnostics` | 認証必須。選択model状態と未価格usageのmodel別診断 |
 | AI洞察 | `POST /api/ai/analyze` | 認証必須。通信先IP・ホスト名・端末名・MACと接続集計を選択providerで手動分析。cloudは二重同意必須 |
+| AI通知 | `GET /api/ai/notification-config` | 認証必須。schedule、発火条件、通知先、実行状態を返す |
+| AI通知 | `POST /api/ai/notification-config` | 認証必須。検証済みscheduleと自動実行同意を保存 |
+| AI通知 | `GET /api/ai/notification-events` | 認証必須。append-only通知履歴を最大200件返す |
+| AI通知 | `POST /api/ai/notification-test` | 認証必須。AIを呼ばずUI/Slack通知をテスト |
+| AI通知 | `POST /api/ai/notification-run-now` | 認証必須。設定済み期間のAI分析を明示実行 |
 | AI対話 | `POST /api/ai/chat` | 認証必須。質問を先に追記し、回答または失敗行をappend-only保存 |
 | AI対話 | `GET /api/ai/conversations` | 認証必須。会話一覧と保存量 |
 | AI対話 | `GET /api/ai/conversations/:id` | 認証必須。再起動後も残るメッセージ履歴 |

@@ -22,7 +22,7 @@ EgressView is production-oriented for home/SOHO networks using Yamaha RTX or Cis
 
 Version 1.5.0 makes AI Insights the start page, with local live metrics, previous-period comparisons, explicit manual analysis/chat through Ollama, Anthropic, OpenAI, or Amazon Bedrock, append-only conversations, and monthly token/cost estimates. It also adds Bedrock model, inference-profile, and Guardrail discovery, runtime CPU diagnostics, and collection-path performance improvements. See the [changelog](CHANGELOG.md) for upgrade details.
 
-Existing databases migrate automatically to schema v7. Startup creates and verifies a complete backup first, and stops without changing the database if free-space, checkpoint, copy, or integrity verification fails. Linux conntrack remains a Docker-validated preview pending physical-router validation.
+Existing databases migrate automatically to schema v8. Startup creates and verifies a complete backup first, and stops without changing the database if free-space, checkpoint, copy, or integrity verification fails. Linux conntrack remains a Docker-validated preview pending physical-router validation.
 
 Existing databases upgrade automatically. Before schema v5 is applied, EgressView creates and verifies a backup and checks observation consistency; startup stops without modifying the database if either check fails. Linux conntrack remains a Docker-validated preview pending physical-router testing.
 
@@ -38,7 +38,7 @@ EgressView answers the question most home users can't ask: *what is each device 
 - **Manual threat investigation** — explicitly query AbuseIPDB, VirusTotal, or AlienVault OTX with server-side caching and rate limits ([guide](docs/manual-threat-investigation.md))
 - **Linux conntrack preview** — collect from Linux-based routers over SSH; Docker integration verified, hardware validation pending ([setup](docs/setup-conntrack.md))
 - **Mobile monitoring view** — check router health, Graph Map, Statistics, Connection Log, Devices, and Detection Log from a phone on your VPN/private network
-- **AI Insights start page** — opens with collection health, connections, devices, destinations, threats, and previous-period comparisons. Manual analysis/chat can use bounded device inventory and ASUS node summaries through Ollama, Anthropic, OpenAI, or Amazon Bedrock, with versioned-catalog monthly tokens/estimated cost, explicit partial totals for unpriced models, and per-answer model/cost metadata ([setup guide](docs/setup-ai-insights.md), [Bedrock production setup](docs/setup-bedrock.md))
+- **AI Insights start page** — opens with collection health, connections, devices, destinations, threats, and previous-period comparisons. Manual analysis/chat can use bounded device inventory and ASUS node summaries through Ollama, Anthropic, OpenAI, or Amazon Bedrock, with versioned-catalog monthly tokens/estimated cost, explicit partial totals for unpriced models, and per-answer model/cost metadata. Optional event notifications add off-by-default daily/weekly reports and bounded threat-change analysis to append-only UI history or Slack ([setup guide](docs/setup-ai-insights.md), [Bedrock production setup](docs/setup-bedrock.md))
 - **Instant Slack alerts** — DM the moment any device connects to a known C2 server or malware distribution host
 - **No hardware changes** — runs on any Mac, PC, or Raspberry Pi alongside your existing Yamaha RTX or Cisco IOS routers
 
@@ -212,7 +212,7 @@ npm start
 
 ### Step 3 — Open the browser and log in
 
-On first startup, an initial **login password** is printed to the console:
+On first startup, an initial **login password** is shown once on an interactive terminal. Service/non-interactive startup writes it to `.egressview.json.initial-login-password` with mode `0600` instead of putting it in a persistent log:
 
 ```
 ══════════════════════════════════════════════════════════════
@@ -241,16 +241,17 @@ For each Cisco IOS router, **Connect & Auto-detect** verifies SSH and NAT access
 
 Within a few seconds, devices, sessions, and statistics will start appearing in the UI.
 
-> **Note:** Credentials are generated once on first startup and saved (hashed) in `.egressview.json`. If you lose the password, remove the `auth` section from `.egressview.json` and restart — a new initial password will be printed.
+> **Note:** The password is stored only as a versioned scrypt record. Remove the one-time password file after the first successful login.
 
 ## Authentication
 
-All API endpoints and the WebSocket connection are protected. Two credentials exist:
+All API endpoints and the WebSocket connection are protected. Local login can never be disabled; Google OIDC is an optional additional login method.
 
 | Credential | Purpose | Where |
 |-----------|---------|-------|
 | **Login password** | Browser login. Each device gets its own revocable session (30-day sliding expiry) | Printed on first startup; change it in Settings → General |
 | **API token** | Scripts / automation (`X-Admin-Token` header) | `.egressview.json` (`adminToken`); regenerate in Settings → General |
+| **Google OIDC** | Allowed Google accounts; sessions are revocable locally | Configure in Settings → General → Authentication & Audit |
 
 ### Session management
 
@@ -261,16 +262,21 @@ All API endpoints and the WebSocket connection are protected. Two credentials ex
 ### If you lose the password
 
 ```bash
-# Remove the auth section and restart — a new initial password is printed
-node -e "const f='.egressview.json',c=require('./'+f);delete c.auth;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
-npm start
+# Interactive TTY only; revokes every browser session
+npm run auth:reset
+# Also rotate the automation credential
+npm run auth:reset -- --regenerate-api-token
 ```
 
 ### How it works
 
-- Passwords are hashed with scrypt; sessions are stored as SHA-256 hashes in SQLite
+- New passwords require at least 14 characters. Passwords use a versioned scrypt record; successful legacy logins upgrade the record.
 - Failed logins are delayed 500 ms; comparisons use `crypto.timingSafeEqual`
-- Session tokens ride the same `X-Admin-Token` header / Socket.IO handshake as the API token
+- Browser sessions use Secure/HttpOnly/SameSite cookies and CSRF protection. Existing header tokens remain supported for automation.
+- Login, logout, session revocation, token changes, and authenticated mutations are recorded in a pseudonymous append-only audit log.
+- Google OIDC uses Authorization Code + PKCE, state, nonce, JWKS signature validation, verified email, and an email/domain allowlist.
+
+See the [authentication and reverse-proxy guide](docs/authentication.md) before enabling internet access.
 
 ## HTTPS (optional)
 
@@ -360,7 +366,7 @@ The ASUS device is used as a **WiFi access point (AP mode or AiMesh)**, not as a
 - Configurable per-destination cooldown (default 1 hour) to prevent notification spam
 - Message language follows the UI language setting (English / Japanese)
 - Test-send button in settings to verify configuration
-- Requires a Slack Bot Token and your User ID (`U01XXXXXXX`) — set up via Settings → Threat Detection
+- Requires a Slack Bot Token and your User ID (`U01XXXXXXX`) — set up via Settings → General
 
 ### Security
 

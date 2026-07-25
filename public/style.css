@@ -7,6 +7,32 @@
   }
   body { background: var(--bg); color: var(--text); font-family: 'SF Mono','Fira Code',monospace; font-size: 13px; overflow: hidden; height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
   .is-hidden { display: none !important; }
+  .login-overlay {
+    position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center;
+    padding: 20px; background:
+      radial-gradient(circle at 18% 12%, rgba(56,189,248,0.16), transparent 34%),
+      radial-gradient(circle at 85% 85%, rgba(16,185,129,0.12), transparent 38%),
+      rgba(3,8,18,0.96);
+  }
+  .login-card {
+    width: min(440px, 100%); padding: 34px; border: 1px solid rgba(56,189,248,0.25);
+    border-radius: 18px; background: rgba(12,21,38,0.94);
+    box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+  }
+  .login-eyebrow { color: var(--cyan); font-size: 10px; letter-spacing: 0.16em; }
+  .login-card h1 { margin: 10px 0 8px; font-size: 22px; }
+  .login-card p { margin: 0 0 20px; color: var(--muted); line-height: 1.6; }
+  .login-card input {
+    width: 100%; padding: 12px; border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); background: rgba(255,255,255,0.04); font: inherit;
+  }
+  .login-primary, .login-google {
+    display: block; width: 100%; margin-top: 12px; padding: 11px; border-radius: 8px;
+    border: 1px solid var(--accent); color: white; background: var(--accent);
+    font: inherit; font-weight: 700; text-align: center; text-decoration: none; cursor: pointer;
+  }
+  .login-google { border-color: var(--border); background: transparent; }
+  .login-error { min-height: 18px; margin-top: 12px; color: var(--red); font-size: 11px; }
   .demo-banner { display: none; background: #f59e0b; color: #000; font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 4px; letter-spacing: .04em; }
   .demo-banner.is-visible { display: block; }
 
@@ -93,8 +119,23 @@
   .settings-session-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
   .settings-session-label { flex: 1; }
   .settings-session-current { color: var(--green); font-size: 9px; margin-left: 4px; }
+  .settings-session-method {
+    margin-left: 6px; padding: 1px 4px; border: 1px solid var(--border);
+    border-radius: 4px; color: var(--cyan); font-size: 8px;
+  }
   .settings-session-seen, .settings-session-muted { color: var(--muted); font-size: 10px; }
   .settings-session-revoke-all { width: auto; padding: 5px 14px; margin-top: 8px; font-size: 10px; background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  .settings-security-actions { display: flex; gap: 8px; }
+  .settings-security-actions .connect-btn { width: auto; min-width: 120px; }
+  .settings-audit-list { max-height: 220px; overflow: auto; font-size: 10px; }
+  .settings-audit-row {
+    display: grid; grid-template-columns: minmax(120px, 1fr) 64px 70px 116px;
+    gap: 8px; align-items: center; padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .settings-audit-event { color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+  .settings-audit-outcome { color: var(--green); }
+  .settings-audit-outcome.failure { color: var(--red); }
   .backup-list-empty { padding: 4px; }
   .settings-description-example, .settings-description-highlight { color: var(--cyan); }
   .settings-description-example { font-size: 10px; }
@@ -365,6 +406,7 @@
       var(--bg);
   }
   .ai-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; max-width: 1180px; width: 100%; margin: 0 auto; }
+  .ai-hero-actions { display: flex; gap: 8px; }
   .ai-eyebrow { color: #38bdf8; font-size: 10px; font-weight: 800; letter-spacing: 0.18em; }
   .ai-hero h2 { margin: 5px 0 4px; font-size: clamp(24px, 4vw, 42px); letter-spacing: -0.04em; }
   .ai-hero p { margin: 0; color: var(--muted); font-size: 12px; }
@@ -429,6 +471,32 @@
   .ai-chat-message.is-pending { color: var(--muted); font-style: italic; }
   .ai-chat-message-meta { margin-top: 7px; padding-top: 6px; border-top: 1px solid rgba(148,163,184,0.16); color: var(--muted); font-size: 10px; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
   .ai-chat-compose textarea { flex: 1; resize: vertical; }
+  .ai-notification-modal { position: fixed; inset: 0; z-index: 1200; display: grid; place-items: center; padding: 18px; background: rgba(2,6,23,0.78); backdrop-filter: blur(8px); }
+  .ai-notification-modal.is-hidden { display: none; }
+  .ai-notification-card { width: min(760px, 100%); max-height: min(850px, 92vh); overflow: auto; padding: 24px; border: 1px solid rgba(56,189,248,0.35); border-radius: 18px; background: #0f1726; box-shadow: 0 24px 80px rgba(0,0,0,0.55); }
+  .ai-notification-confirm-modal { z-index: 1210; }
+  .ai-notification-confirm-card { width: min(520px, 100%); }
+  .ai-notification-summary { display: grid; grid-template-columns: minmax(120px, 0.8fr) minmax(0, 1.5fr); margin: 20px 0 0; border-top: 1px solid var(--border); }
+  .ai-notification-summary-row { display: contents; }
+  .ai-notification-summary dt, .ai-notification-summary dd { margin: 0; padding: 10px 8px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+  .ai-notification-summary dt { color: var(--muted); font-size: 10px; }
+  .ai-notification-summary dd { color: var(--text); font-size: 11px; }
+  .ai-notification-head { display: flex; justify-content: space-between; gap: 18px; }
+  .ai-notification-head h3, .ai-notification-history h4 { margin: 0 0 5px; }
+  .ai-notification-head p { margin: 0; color: var(--muted); font-size: 11px; }
+  .ai-notification-close { border: 0; color: var(--muted); background: transparent; font-size: 25px; cursor: pointer; }
+  .ai-notification-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+  .ai-notification-grid label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; }
+  .ai-notification-fieldset { display: flex; flex-wrap: wrap; gap: 14px; margin: 18px 0 0; padding: 14px; border: 1px solid var(--border); border-radius: 11px; }
+  .ai-notification-fieldset legend { padding: 0 6px; color: #bae6fd; font-size: 11px; }
+  .ai-notification-fieldset .ai-notification-grid { flex-basis: 100%; margin-top: 2px; }
+  .ai-notification-consent { display: flex; align-items: flex-start; gap: 8px; margin-top: 18px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+  .ai-notification-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .ai-notification-history { margin-top: 20px; }
+  .ai-notification-event { padding: 10px 12px; border-top: 1px solid var(--border); }
+  .ai-notification-event strong, .ai-notification-event span { display: block; }
+  .ai-notification-event span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+  .ai-notification-event pre { max-height: 130px; overflow: auto; margin: 8px 0 0; white-space: pre-wrap; color: var(--text); font: 10px/1.55 inherit; }
   @media (max-width: 700px) { .ai-chat-head, .ai-chat-tools, .ai-chat-compose { align-items: stretch; flex-direction: column; } .ai-chat-message { max-width: 95%; } }
   .log-header { font-size: 12px; font-weight: 600; color: var(--text); padding: 4px 8px; display: flex; align-items: center; gap: 8px; }
   .log-title { font-size: 13px; }
@@ -965,12 +1033,17 @@
     .activity-view.view-active { min-height: calc(100dvh - 132px); }
     .ai-view { padding: 16px 10px; }
     .ai-hero { align-items: flex-start; }
+    .ai-hero-actions { flex-direction: column; }
     .ai-hero p { max-width: 250px; }
     .ai-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .ai-usage-grid { grid-template-columns: 1fr; }
     .ai-metric:first-child { grid-column: 1 / -1; }
     .ai-metric { padding: 15px; }
     .ai-updated { width: 100%; margin-left: 17px; }
+    .ai-notification-grid { grid-template-columns: 1fr; }
+    .ai-notification-summary { grid-template-columns: 1fr; }
+    .ai-notification-summary dt { padding-bottom: 2px; border-bottom: 0; }
+    .ai-notification-summary dd { padding-top: 2px; }
     .log-header { flex-wrap: wrap; min-height: 38px; padding: 4px; }
     .log-export-controls { margin-left: 0; }
     .activity-refresh { min-height: 34px; }

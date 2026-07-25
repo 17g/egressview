@@ -7,8 +7,10 @@ const path = require('node:path');
 
 const ROUTES_DIR = path.join(__dirname, '../../src/routes');
 const ENDPOINT_MODULES = [
+  'ai-notifications.js',
   'ai.js',
   'auth-sessions.js',
+  'auth-security.js',
   'backup.js',
   'beacons.js',
   'config.js',

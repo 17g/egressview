@@ -18,8 +18,11 @@ const beaconsRoutes = require('./routes/beacons');
 const routerRoutes = require('./routes/routers');
 const manualThreatRoutes = require('./routes/manual-threat');
 const aiRoutes = require('./routes/ai');
+const aiNotificationRoutes = require('./routes/ai-notifications');
 const { createSlowRequestLogger } = require('./slow-request-log');
 const { createRequestContextMiddleware } = require('./request-context');
+const { createTrustProxy } = require('./proxy-trust');
+const { createGlobalRateLimit } = require('./global-rate-limit');
 const i18nCatalog = require('./data/i18n.json');
 
 function serializeI18nModule(catalog) {
@@ -83,8 +86,10 @@ function configureHttpApp(app, {
   logger,
   healthState,
 }) {
+  app.set('trust proxy', createTrustProxy());
   app.use(createRequestContextMiddleware({ logger }));
   app.use(createSlowRequestLogger());
+  app.use(createGlobalRateLimit());
 
   app.use((req, res, next) => {
     res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
@@ -183,6 +188,7 @@ function configureHttpApp(app, {
   }));
   if (routeCtx.manualThreat) app.use('/api', manualThreatRoutes(routeCtx));
   if (routeCtx.aiProvider) app.use('/api', aiRoutes(routeCtx));
+  if (routeCtx.aiNotificationService) app.use('/api', aiNotificationRoutes(routeCtx));
 
   app.use((err, req, res, next) => {
     logger.error('[express] unhandled error:', err.message);
